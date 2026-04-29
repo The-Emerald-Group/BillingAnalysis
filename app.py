@@ -1266,60 +1266,49 @@ def api_merge_mappings():
 @app.route("/api/platform-options", methods=["GET"])
 def api_platform_options():
     include_linked = (request.args.get("include_linked") or "false").strip().lower() == "true"
+    merge_mappings = load_merge_mappings()
+    links = load_platform_links()
+    linked_keys = set()
+    for link in links:
+        linked_keys.add(resolve_merge_key(str(link.get("nable_key") or ""), merge_mappings))
+        linked_keys.add(resolve_merge_key(str(link.get("sophos_key") or ""), merge_mappings))
+
     with db_lock:
         conn = get_conn()
         cur = conn.cursor()
-        if include_linked:
-            cur.execute(
-                """
-                SELECT DISTINCT nable_source_name
-                FROM customers
-                WHERE nable_source_name IS NOT NULL AND TRIM(nable_source_name) <> ''
-                ORDER BY nable_source_name COLLATE NOCASE ASC
-                """
-            )
-        else:
-            cur.execute(
-                """
-                SELECT DISTINCT c.nable_source_name
-                FROM customers c
-                WHERE c.nable_source_name IS NOT NULL
-                  AND TRIM(c.nable_source_name) <> ''
-                  AND c.normalized_key NOT IN (
-                      SELECT nable_key FROM platform_links
-                      UNION
-                      SELECT sophos_key FROM platform_links
-                  )
-                ORDER BY c.nable_source_name COLLATE NOCASE ASC
-                """
-            )
-        nable = [r[0] for r in cur.fetchall()]
-        if include_linked:
-            cur.execute(
-                """
-                SELECT DISTINCT sophos_source_name
-                FROM customers
-                WHERE sophos_source_name IS NOT NULL AND TRIM(sophos_source_name) <> ''
-                ORDER BY sophos_source_name COLLATE NOCASE ASC
-                """
-            )
-        else:
-            cur.execute(
-                """
-                SELECT DISTINCT c.sophos_source_name
-                FROM customers c
-                WHERE c.sophos_source_name IS NOT NULL
-                  AND TRIM(c.sophos_source_name) <> ''
-                  AND c.normalized_key NOT IN (
-                      SELECT nable_key FROM platform_links
-                      UNION
-                      SELECT sophos_key FROM platform_links
-                  )
-                ORDER BY c.sophos_source_name COLLATE NOCASE ASC
-                """
-            )
-        sophos = [r[0] for r in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT DISTINCT nable_source_name
+            FROM customers
+            WHERE nable_source_name IS NOT NULL AND TRIM(nable_source_name) <> ''
+            ORDER BY nable_source_name COLLATE NOCASE ASC
+            """
+        )
+        nable_all = [r[0] for r in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT DISTINCT sophos_source_name
+            FROM customers
+            WHERE sophos_source_name IS NOT NULL AND TRIM(sophos_source_name) <> ''
+            ORDER BY sophos_source_name COLLATE NOCASE ASC
+            """
+        )
+        sophos_all = [r[0] for r in cur.fetchall()]
         conn.close()
+
+    if include_linked:
+        nable = nable_all
+        sophos = sophos_all
+    else:
+        nable = [
+            n for n in nable_all
+            if resolve_merge_key(normalize_customer_name(str(n)), merge_mappings) not in linked_keys
+        ]
+        sophos = [
+            s for s in sophos_all
+            if resolve_merge_key(normalize_customer_name(str(s)), merge_mappings) not in linked_keys
+        ]
+
     return jsonify({"nable": nable, "sophos": sophos, "include_linked": include_linked})
 
 
