@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sqlite3
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -41,6 +42,8 @@ sync_lock = threading.Lock()
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
     format="[%(asctime)s] %(levelname)s %(message)s",
+    stream=sys.stdout,
+    force=True,
 )
 logger = logging.getLogger("billing-portal")
 
