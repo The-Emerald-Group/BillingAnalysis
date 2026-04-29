@@ -82,3 +82,17 @@ SQLite tables:
 - **No data shown**: verify credentials and run manual sync from the UI.
 - **Sync errors**: check container logs with `docker logs billing-portal`.
 - **Slow startup**: first sync can take longer because all tenants/customers are fetched.
+
+## Docker CI/CD Workflow
+
+This repo includes `.github/workflows/docker-build.yml` to match your other projects.
+
+- Builds on `main`, tags (`v*`), PRs, and manual dispatch.
+- Multi-arch build target: `linux/amd64` and `linux/arm64`.
+- Pushes images for non-PR runs.
+
+Set these repository secrets in GitHub:
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+- `DOCKERHUB_IMAGE` (for example: `samuelstreets/general-billing-portal`)
