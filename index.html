@@ -27,13 +27,18 @@
       .app {
         display: grid;
         grid-template-columns: 360px 1fr;
-        min-height: 100vh;
+        height: 100vh;
+        overflow: hidden;
       }
 
       .sidebar {
         border-right: 1px solid var(--line);
         background: var(--panel);
         padding: 16px;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        overflow: hidden;
       }
 
       .title { margin: 0; font-size: 20px; }
@@ -90,7 +95,8 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
-        max-height: calc(100vh - 220px);
+        flex: 1;
+        min-height: 0;
         overflow: auto;
       }
 
@@ -117,6 +123,10 @@
 
       .main {
         padding: 24px;
+        height: 100vh;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
       }
       .status {
         display: flex;
@@ -156,6 +166,13 @@
         border: 1px dashed #334155;
         border-radius: 10px;
         padding: 18px;
+      }
+      .detail-area {
+        margin-top: 16px;
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        padding-right: 6px;
       }
 
       .customer-name {
@@ -213,6 +230,30 @@
         margin-bottom: 8px;
         white-space: pre-wrap;
       }
+      .compare-progress {
+        height: 8px;
+        border: 1px solid #334155;
+        border-radius: 999px;
+        background: #0b1220;
+        overflow: hidden;
+        margin-bottom: 8px;
+        display: none;
+      }
+      .compare-progress.active {
+        display: block;
+      }
+      .compare-progress-bar {
+        width: 35%;
+        height: 100%;
+        background: linear-gradient(90deg, #2563eb, #60a5fa);
+        animation: compare-progress-indeterminate 1.2s infinite linear;
+      }
+      .compare-phase {
+        color: #93c5fd;
+        font-size: 12px;
+        margin-bottom: 8px;
+        min-height: 16px;
+      }
       .compare-columns {
         display: block;
       }
@@ -237,11 +278,13 @@
       .compare-table-wrap {
         border: 1px solid #273449;
         border-radius: 8px;
+        overflow: auto;
       }
       .compare-table {
         width: 100%;
         border-collapse: collapse;
         font-size: 12px;
+        min-width: 960px;
       }
       .compare-table th,
       .compare-table td {
@@ -254,6 +297,22 @@
         top: 0;
         background: #0b1220;
         z-index: 1;
+      }
+      .compare-table th:first-child,
+      .compare-table td:first-child {
+        position: sticky;
+        left: 0;
+        z-index: 2;
+        background: inherit;
+        min-width: 170px;
+      }
+      .compare-table th:nth-child(2),
+      .compare-table td:nth-child(2) {
+        position: sticky;
+        left: 170px;
+        z-index: 2;
+        background: inherit;
+        min-width: 260px;
       }
       .compare-row-match {
         background: rgba(22, 163, 74, 0.14);
@@ -295,6 +354,41 @@
       .compare-counter.match {
         color: #86efac;
         border-color: #166534;
+      }
+      .compare-controls {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      .compare-filter-chip {
+        border: 1px solid #334155;
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 12px;
+        background: #0b1220;
+        color: #cbd5e1;
+        cursor: pointer;
+      }
+      .compare-filter-chip.active {
+        border-color: #2563eb;
+        color: #dbeafe;
+      }
+      .checkbox-label {
+        font-size: 12px;
+        color: #cbd5e1;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .hint-text {
+        color: #fcd34d;
+        font-size: 11px;
+      }
+      @keyframes compare-progress-indeterminate {
+        0% { transform: translateX(-120%); }
+        100% { transform: translateX(320%); }
       }
     </style>
   </head>
@@ -341,7 +435,7 @@
         </div>
 
         <div id="emptyState" class="empty">Pick a customer on the left to view N-able and Sophos counts.</div>
-        <div id="detailArea" style="display: none;">
+        <div id="detailArea" class="detail-area" style="display: none;">
           <h2 id="customerName" class="customer-name"></h2>
           <div class="cards">
             <article class="card">
@@ -368,6 +462,10 @@
               <button id="compareButton" class="button" type="button">Compare Device Names</button>
               <span id="compareSummary" class="compare-summary"></span>
             </div>
+            <div id="compareProgress" class="compare-progress">
+              <div class="compare-progress-bar"></div>
+            </div>
+            <div id="comparePhase" class="compare-phase"></div>
             <div id="compareWarnings" class="compare-warn"></div>
             <div class="compare-columns">
               <div class="compare-col">
@@ -376,6 +474,14 @@
                   <span id="missSophosCounter" class="compare-counter miss-sophos">Missing from Sophos: 0</span>
                   <span id="missNableCounter" class="compare-counter miss-nable">Missing from N-able: 0</span>
                   <span id="matchedCounter" class="compare-counter match">Matched: 0</span>
+                </div>
+                <div class="compare-controls">
+                  <button id="filterAllBtn" class="compare-filter-chip active" type="button">All</button>
+                  <button id="filterMissSophosBtn" class="compare-filter-chip" type="button">Missing from Sophos</button>
+                  <button id="filterMissNableBtn" class="compare-filter-chip" type="button">Missing from N-able</button>
+                  <button id="filterMatchBtn" class="compare-filter-chip" type="button">Matched</button>
+                  <label class="checkbox-label"><input id="showOnlyMismatch" type="checkbox" checked /> Show only mismatches</label>
+                  <button id="exportMismatchBtn" class="button secondary" type="button">Export Mismatches CSV</button>
                 </div>
                 <div class="compare-table-wrap">
                   <table class="compare-table">
@@ -425,6 +531,16 @@
       const missSophosCounter = document.getElementById("missSophosCounter");
       const missNableCounter = document.getElementById("missNableCounter");
       const matchedCounter = document.getElementById("matchedCounter");
+      const compareProgress = document.getElementById("compareProgress");
+      const comparePhase = document.getElementById("comparePhase");
+      const filterAllBtn = document.getElementById("filterAllBtn");
+      const filterMissSophosBtn = document.getElementById("filterMissSophosBtn");
+      const filterMissNableBtn = document.getElementById("filterMissNableBtn");
+      const filterMatchBtn = document.getElementById("filterMatchBtn");
+      const showOnlyMismatch = document.getElementById("showOnlyMismatch");
+      const exportMismatchBtn = document.getElementById("exportMismatchBtn");
+      let compareRows = [];
+      let compareStatusFilter = "all";
 
       function fmtDate(iso) {
         if (!iso) return "never";
@@ -442,6 +558,30 @@
           icons.push('<img class="mini-icon" src="/assets/sophos.svg" alt="Sophos" title="Sophos" />');
         }
         return icons.join("");
+      }
+
+      function escapedCsv(v) {
+        const s = String(v == null ? "" : v);
+        return `"${s.replaceAll('"', '""')}"`;
+      }
+
+      function applyCompareFilters(rows) {
+        let out = rows || [];
+        if (showOnlyMismatch.checked) {
+          out = out.filter((r) => r.status !== "match");
+        }
+        if (compareStatusFilter !== "all") {
+          out = out.filter((r) => r.status === compareStatusFilter);
+        }
+        return out;
+      }
+
+      function renderCompareFilterChips() {
+        [filterAllBtn, filterMissSophosBtn, filterMissNableBtn, filterMatchBtn].forEach((btn) => btn.classList.remove("active"));
+        if (compareStatusFilter === "missing_from_sophos") filterMissSophosBtn.classList.add("active");
+        else if (compareStatusFilter === "missing_from_nable") filterMissNableBtn.classList.add("active");
+        else if (compareStatusFilter === "match") filterMatchBtn.classList.add("active");
+        else filterAllBtn.classList.add("active");
       }
 
       function renderList() {
@@ -516,6 +656,12 @@
         missSophosCounter.textContent = "Missing from Sophos: 0";
         missNableCounter.textContent = "Missing from N-able: 0";
         matchedCounter.textContent = "Matched: 0";
+        compareProgress.classList.remove("active");
+        comparePhase.textContent = "";
+        compareRows = [];
+        compareStatusFilter = "all";
+        showOnlyMismatch.checked = true;
+        renderCompareFilterChips();
       }
 
       async function loadStatus() {
@@ -549,11 +695,12 @@
 
 
       function renderComparisonRows(rows) {
-        if (!rows || !rows.length) {
+        const visibleRows = applyCompareFilters(rows);
+        if (!visibleRows || !visibleRows.length) {
           compareRowsBody.innerHTML = `<tr><td colspan="4">No device names found.</td></tr>`;
           return;
         }
-        compareRowsBody.innerHTML = rows.map((r) => {
+        compareRowsBody.innerHTML = visibleRows.map((r) => {
           const mismatch = r.status !== "match";
           const rowClass = mismatch ? "compare-row-mismatch" : "compare-row-match";
           const chipClass = mismatch ? "status-chip mismatch" : "status-chip match";
@@ -562,10 +709,11 @@
             : r.status === "missing_from_nable"
               ? "Missing from N-able"
               : "Match";
+          const nearHint = r.near_match_hint && mismatch ? `<div class="hint-text">Near match on other side: ${r.near_match_hint}</div>` : "";
           return `
             <tr class="${rowClass}">
               <td><span class="${chipClass}">${label}</span></td>
-              <td>${r.display_name || ""}</td>
+              <td>${r.display_name || ""}${nearHint}</td>
               <td>${r.nable_name || "—"}</td>
               <td>${r.sophos_name || "—"}</td>
             </tr>
@@ -581,6 +729,18 @@
         compareButton.disabled = true;
         compareButton.textContent = "Comparing...";
         compareSummary.textContent = "Loading device comparison...";
+        compareProgress.classList.add("active");
+        const phases = [
+          "Fetching N-able device list...",
+          "Fetching Sophos device list...",
+          "Matching and sorting device names...",
+        ];
+        let phaseIdx = 0;
+        comparePhase.textContent = phases[phaseIdx];
+        const phaseTimer = setInterval(() => {
+          phaseIdx = (phaseIdx + 1) % phases.length;
+          comparePhase.textContent = phases[phaseIdx];
+        }, 1100);
         try {
           const res = await fetch(`/api/customers/${state.selectedId}/device-compare`);
           const data = await res.json();
@@ -590,13 +750,18 @@
           }
           compareSummary.textContent = `Matched: ${data.matched_names} | N-able names: ${data.nable_total_names} | Sophos names: ${data.sophos_total_names}`;
           compareWarnings.textContent = (data.warnings || []).join("\n");
-          renderComparisonRows(data.comparison_rows || []);
+          compareRows = data.comparison_rows || [];
+          renderCompareFilterChips();
+          renderComparisonRows(compareRows);
           missSophosCounter.textContent = `Missing from Sophos: ${(data.missing_from_sophos || []).length}`;
           missNableCounter.textContent = `Missing from N-able: ${(data.missing_from_nable || []).length}`;
           matchedCounter.textContent = `Matched: ${data.matched_names || 0}`;
         } catch (err) {
           compareSummary.textContent = `Compare request failed: ${err}`;
         } finally {
+          clearInterval(phaseTimer);
+          compareProgress.classList.remove("active");
+          comparePhase.textContent = "";
           compareButton.disabled = false;
           compareButton.textContent = "Compare Device Names";
         }
@@ -607,6 +772,52 @@
       sortFilter.addEventListener("change", loadCustomers);
       refreshButton.addEventListener("click", runSync);
       compareButton.addEventListener("click", runDeviceCompare);
+      filterAllBtn.addEventListener("click", () => {
+        compareStatusFilter = "all";
+        renderCompareFilterChips();
+        renderComparisonRows(compareRows);
+      });
+      filterMissSophosBtn.addEventListener("click", () => {
+        compareStatusFilter = "missing_from_sophos";
+        renderCompareFilterChips();
+        renderComparisonRows(compareRows);
+      });
+      filterMissNableBtn.addEventListener("click", () => {
+        compareStatusFilter = "missing_from_nable";
+        renderCompareFilterChips();
+        renderComparisonRows(compareRows);
+      });
+      filterMatchBtn.addEventListener("click", () => {
+        compareStatusFilter = "match";
+        renderCompareFilterChips();
+        renderComparisonRows(compareRows);
+      });
+      showOnlyMismatch.addEventListener("change", () => renderComparisonRows(compareRows));
+      exportMismatchBtn.addEventListener("click", () => {
+        const mismatches = (compareRows || []).filter((r) => r.status !== "match");
+        if (!mismatches.length) {
+          compareSummary.textContent = "No mismatches to export.";
+          return;
+        }
+        const header = ["status", "preferred_name", "nable_name", "sophos_name", "near_match_hint"];
+        const lines = [header.map(escapedCsv).join(",")];
+        mismatches.forEach((r) => {
+          lines.push(
+            [r.status, r.display_name || "", r.nable_name || "", r.sophos_name || "", r.near_match_hint || ""]
+              .map(escapedCsv)
+              .join(",")
+          );
+        });
+        const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `device-mismatches-customer-${state.selectedId || "unknown"}.csv`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      });
 
       (async () => {
         await loadStatus();

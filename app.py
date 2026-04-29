@@ -372,16 +372,59 @@ def extract_nable_customer_name(device: Dict) -> str:
 
 
 def extract_nable_device_name(device: Dict) -> str:
-    candidates = [
-        device.get("longName"),
-        device.get("name"),
-        device.get("deviceName"),
-        device.get("hostname"),
-    ]
+    candidates = extract_nable_device_name_candidates(device)
+    return candidates[0] if candidates else ""
+
+
+def extract_nable_device_name_candidates(device: Dict) -> List[str]:
+    candidates: List[str] = []
+    field_names = (
+        "longName",
+        "name",
+        "deviceName",
+        "hostname",
+        "displayName",
+        "computerName",
+        "dnsName",
+        "netbiosName",
+        "systemName",
+        "machineName",
+        "assetName",
+        "agentName",
+    )
+    nested_objects = (
+        "device",
+        "agent",
+        "system",
+        "network",
+        "computer",
+    )
+
+    for field in field_names:
+        value = device.get(field)
+        if isinstance(value, str) and value.strip():
+            candidates.append(value.strip())
+
+    for obj_key in nested_objects:
+        nested = device.get(obj_key)
+        if not isinstance(nested, dict):
+            continue
+        for field in field_names:
+            value = nested.get(field)
+            if isinstance(value, str) and value.strip():
+                candidates.append(value.strip())
+
+    # Preserve order, dedupe case-insensitively.
+    deduped: List[str] = []
+    seen = set()
     for candidate in candidates:
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
-    return ""
+        folded = candidate.lower()
+        if folded in seen:
+            continue
+        seen.add(folded)
+        deduped.append(candidate)
+
+    return deduped
 
 
 def extract_devices_from_response(payload) -> List[Dict]:
@@ -400,6 +443,10 @@ def normalize_device_name(name: str) -> str:
     cleaned = re.sub(r"\.local$|\.lan$|\.corp$|\.internal$", "", cleaned)
     cleaned = re.sub(r"[^a-z0-9\-_.]", "", cleaned)
     return cleaned
+
+
+def device_name_skeleton(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (name or "").strip().lower())
 
 
 def fetch_nable_access_token() -> str:
@@ -1209,9 +1256,9 @@ def api_customer_device_compare(customer_id: int):
             # Use both normalized key matching and exact source-name fallback.
             if ckey != normalized_target and (not nable_source_name or cname_l != nable_source_name):
                 continue
-            dname = extract_nable_device_name(dev)
-            if dname:
-                nable_names.append(dname)
+            aliases = extract_nable_device_name_candidates(dev)
+            if aliases:
+                nable_names.extend(aliases)
     except Exception as exc:
         warn = f"N-able compare fetch failed: {exc}"
         warnings.append(warn)
@@ -1251,6 +1298,17 @@ def api_customer_device_compare(customer_id: int):
     nable_set = set(nable_by_norm.keys())
     sophos_set = set(sophos_by_norm.keys())
 
+    nable_skeleton_to_name: Dict[str, str] = {}
+    for value in nable_by_norm.values():
+        sk = device_name_skeleton(value)
+        if sk and sk not in nable_skeleton_to_name:
+            nable_skeleton_to_name[sk] = value
+    sophos_skeleton_to_name: Dict[str, str] = {}
+    for value in sophos_by_norm.values():
+        sk = device_name_skeleton(value)
+        if sk and sk not in sophos_skeleton_to_name:
+            sophos_skeleton_to_name[sk] = value
+
     missing_from_nable = sorted([sophos_by_norm[k] for k in (sophos_set - nable_set)])
     missing_from_sophos = sorted([nable_by_norm[k] for k in (nable_set - sophos_set)])
     all_keys = sorted(nable_set | sophos_set)
@@ -1268,11 +1326,15 @@ def api_customer_device_compare(customer_id: int):
             label = "Missing from Sophos"
             sort_rank = 0
             display = n_name
+            skeleton = device_name_skeleton(n_name)
+            near_match = sophos_skeleton_to_name.get(skeleton) if skeleton else None
         else:
             status = "missing_from_nable"
             label = "Missing from N-able"
             sort_rank = 0
             display = s_name
+            skeleton = device_name_skeleton(s_name)
+            near_match = nable_skeleton_to_name.get(skeleton) if skeleton else None
 
         comparison_rows.append(
             {
@@ -1282,6 +1344,7 @@ def api_customer_device_compare(customer_id: int):
                 "display_name": display,
                 "nable_name": n_name,
                 "sophos_name": s_name,
+                "near_match_hint": near_match,
                 "sort_rank": sort_rank,
             }
         )
