@@ -57,21 +57,14 @@ runtime_state = {
     "last_sync_details": {},
 }
 
-BUSINESS_STOPWORDS = {
+LEGAL_SUFFIX_STOPWORDS = {
     "ltd",
     "limited",
     "llc",
     "inc",
     "corp",
     "co",
-    "company",
-    "services",
-    "service",
-    "management",
-    "financial",
-    "solutions",
-    "solution",
-    "group",
+    "plc",
 }
 
 
@@ -113,7 +106,7 @@ def normalize_customer_name(name: str) -> str:
     tokens = []
     for token in raw_tokens:
         singular = singularize_token(token)
-        if singular in BUSINESS_STOPWORDS:
+        if singular in LEGAL_SUFFIX_STOPWORDS:
             continue
         tokens.append(singular)
     # Fall back to cleaned name if everything was filtered.
@@ -732,6 +725,87 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
     return merged
 
 
+def dedupe_customers_by_display_name() -> Dict[str, int]:
+    result = {"groups_processed": 0, "rows_removed": 0}
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                c.id,
+                c.display_name,
+                c.normalized_key,
+                c.nable_source_name,
+                c.sophos_source_name,
+                l.nable_count,
+                l.sophos_count
+            FROM customers c
+            INNER JOIN customer_counts_latest l ON l.customer_id = c.id
+            ORDER BY LOWER(c.display_name), c.id
+            """
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        groups: Dict[str, List[Dict]] = {}
+        for row in rows:
+            key = (row.get("display_name") or "").strip().lower()
+            groups.setdefault(key, []).append(row)
+
+        for key, members in groups.items():
+            if len(members) <= 1:
+                continue
+            result["groups_processed"] += 1
+            members_sorted = sorted(
+                members,
+                key=lambda m: (-(int(m.get("nable_count") or 0) + int(m.get("sophos_count") or 0)), m["id"]),
+            )
+            primary = members_sorted[0]
+            others = members_sorted[1:]
+            total_nable = sum(int(m.get("nable_count") or 0) for m in members_sorted)
+            total_sophos = sum(int(m.get("sophos_count") or 0) for m in members_sorted)
+
+            cur.execute(
+                """
+                UPDATE customer_counts_latest
+                SET nable_count = ?,
+                    sophos_count = ?,
+                    has_nable = ?,
+                    has_sophos = ?,
+                    last_synced_at = ?
+                WHERE customer_id = ?
+                """,
+                (
+                    total_nable,
+                    total_sophos,
+                    1 if total_nable > 0 else 0,
+                    1 if total_sophos > 0 else 0,
+                    utc_now_iso(),
+                    primary["id"],
+                ),
+            )
+
+            for other in others:
+                cur.execute("DELETE FROM customer_counts_latest WHERE customer_id = ?", (other["id"],))
+                cur.execute("DELETE FROM customers WHERE id = ?", (other["id"],))
+                result["rows_removed"] += 1
+
+        conn.commit()
+        conn.close()
+    return result
+
+
+def reset_merge_state_and_cached_data() -> None:
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM merge_mappings")
+        cur.execute("DELETE FROM customer_counts_latest")
+        cur.execute("DELETE FROM customers")
+        cur.execute("DELETE FROM customer_count_history")
+        conn.commit()
+        conn.close()
+
+
 def run_sync(trigger: str = "scheduled") -> Tuple[bool, str, Dict]:
     if not sync_lock.acquire(blocking=False):
         return False, "Sync already in progress", {"errors": {"sync": "Sync already in progress"}}
@@ -1099,6 +1173,19 @@ def api_create_merge_mapping():
             "merge_result": merge_result,
         }
     ), 202
+
+
+@app.route("/api/maintenance/dedupe-display-names", methods=["POST"])
+def api_dedupe_display_names():
+    summary = dedupe_customers_by_display_name()
+    return jsonify({"success": True, "summary": summary}), 200
+
+
+@app.route("/api/maintenance/reset-merges", methods=["POST"])
+def api_reset_merges():
+    reset_merge_state_and_cached_data()
+    trigger_sync_async("reset-merges")
+    return jsonify({"success": True, "message": "Merge mappings cleared, cache reset, and sync started"}), 202
 
 
 if __name__ == "__main__":

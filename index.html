@@ -196,6 +196,16 @@
         font-size: 12px;
         color: var(--muted);
       }
+      .maintenance-actions {
+        margin-top: 10px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .button.secondary {
+        background: #1f2937;
+        border-color: #334155;
+      }
       .compare-box {
         margin-top: 16px;
         background: var(--panel);
@@ -294,6 +304,10 @@
               <button id="mergeButton" class="button" type="button">Merge</button>
             </div>
             <div id="mergeMessage" class="merge-msg">Map one customer name into another when auto-match misses.</div>
+            <div class="maintenance-actions">
+              <button id="dedupeButton" class="button secondary" type="button">Cleanup Duplicate Names</button>
+              <button id="resetMergesButton" class="button secondary" type="button">Reset Merges + Rebuild Cache</button>
+            </div>
           </div>
 
           <div class="compare-box">
@@ -340,6 +354,8 @@
       const mergeTo = document.getElementById("mergeTo");
       const mergeButton = document.getElementById("mergeButton");
       const mergeMessage = document.getElementById("mergeMessage");
+      const dedupeButton = document.getElementById("dedupeButton");
+      const resetMergesButton = document.getElementById("resetMergesButton");
       const compareButton = document.getElementById("compareButton");
       const compareSummary = document.getElementById("compareSummary");
       const compareWarnings = document.getElementById("compareWarnings");
@@ -512,6 +528,51 @@
         }
       }
 
+      async function cleanupDuplicateNames() {
+        dedupeButton.disabled = true;
+        try {
+          const res = await fetch("/api/maintenance/dedupe-display-names", { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) {
+            mergeMessage.textContent = data.error || "Duplicate cleanup failed.";
+            return;
+          }
+          const s = data.summary || {};
+          mergeMessage.textContent = `Duplicate cleanup done. Groups: ${s.groups_processed || 0}, rows removed: ${s.rows_removed || 0}.`;
+          await loadCustomers();
+          await loadStatus();
+        } catch (err) {
+          mergeMessage.textContent = `Duplicate cleanup failed: ${err}`;
+        } finally {
+          dedupeButton.disabled = false;
+        }
+      }
+
+      async function resetMergesAndRebuild() {
+        const confirmed = window.confirm("This will clear all manual merges, wipe cached customer counts, and start a full rebuild sync. Continue?");
+        if (!confirmed) return;
+        resetMergesButton.disabled = true;
+        try {
+          const res = await fetch("/api/maintenance/reset-merges", { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) {
+            mergeMessage.textContent = data.error || "Reset merges failed.";
+            return;
+          }
+          mergeMessage.textContent = "Merges reset and cache rebuild started.";
+          await loadStatus();
+          await loadCustomers();
+          setTimeout(async () => {
+            await loadStatus();
+            await loadCustomers();
+          }, 4500);
+        } catch (err) {
+          mergeMessage.textContent = `Reset merges failed: ${err}`;
+        } finally {
+          resetMergesButton.disabled = false;
+        }
+      }
+
       function renderMissingList(targetEl, items) {
         if (!items.length) {
           targetEl.innerHTML = "<li>None</li>";
@@ -551,6 +612,8 @@
       statusFilter.addEventListener("change", loadCustomers);
       refreshButton.addEventListener("click", runSync);
       mergeButton.addEventListener("click", createMergeMapping);
+      dedupeButton.addEventListener("click", cleanupDuplicateNames);
+      resetMergesButton.addEventListener("click", resetMergesAndRebuild);
       compareButton.addEventListener("click", runDeviceCompare);
 
       (async () => {
