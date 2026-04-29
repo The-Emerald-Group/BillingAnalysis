@@ -1023,17 +1023,40 @@ def api_merge_mappings():
 @app.route("/api/merge-mappings", methods=["POST"])
 def api_create_merge_mapping():
     payload = request.get_json(silent=True) or {}
+    from_id_raw = payload.get("from_id")
+    to_id_raw = payload.get("to_id")
     from_name = str(payload.get("from_name") or "").strip()
     to_name = str(payload.get("to_name") or "").strip()
-    if not from_name or not to_name:
-        return jsonify({"error": "from_name and to_name are required"}), 400
+    from_key = ""
+    to_key = ""
 
-    from_key = normalize_customer_name(from_name)
-    to_key = normalize_customer_name(to_name)
+    # Prefer ID-based merge so duplicate display names can still be merged safely.
+    if from_id_raw is not None and to_id_raw is not None:
+        try:
+            from_id = int(from_id_raw)
+            to_id = int(to_id_raw)
+        except Exception:
+            return jsonify({"error": "from_id and to_id must be integers"}), 400
+        if from_id == to_id:
+            return jsonify({"error": "Source and target must be different customers"}), 400
+
+        from_customer = get_customer_by_id(from_id)
+        to_customer = get_customer_by_id(to_id)
+        if not from_customer or not to_customer:
+            return jsonify({"error": "One or both customers were not found"}), 404
+
+        from_key = str(from_customer.get("normalized_key") or "").strip()
+        to_key = str(to_customer.get("normalized_key") or "").strip()
+    else:
+        if not from_name or not to_name:
+            return jsonify({"error": "Provide from_id/to_id or from_name/to_name"}), 400
+        from_key = normalize_customer_name(from_name)
+        to_key = normalize_customer_name(to_name)
+
     if not from_key or not to_key:
-        return jsonify({"error": "Unable to normalize one or both names"}), 400
+        return jsonify({"error": "Unable to resolve one or both customer keys"}), 400
     if from_key == to_key:
-        return jsonify({"error": "Source and target normalize to the same key"}), 400
+        return jsonify({"error": "Source and target already resolve to the same customer"}), 400
 
     existing = load_merge_mappings()
     if resolve_merge_key(to_key, existing) == from_key:

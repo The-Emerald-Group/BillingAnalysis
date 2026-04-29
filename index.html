@@ -394,7 +394,10 @@
 
       function renderMergeOptions() {
         const opts = state.customers
-          .map((c) => `<option value="${String(c.display_name).replace(/"/g, "&quot;")}">${c.display_name}</option>`)
+          .map((c) => {
+            const label = `${c.display_name} (ID ${c.id})`;
+            return `<option value="${c.id}">${label}</option>`;
+          })
           .join("");
         mergeFrom.innerHTML = `<option value="">Merge from...</option>${opts}`;
         mergeTo.innerHTML = `<option value="">Merge into...</option>${opts}`;
@@ -453,16 +456,20 @@
       }
 
       async function createMergeMapping() {
-        const fromName = mergeFrom.value;
-        const toName = mergeTo.value;
-        if (!fromName || !toName) {
+        const fromId = mergeFrom.value;
+        const toId = mergeTo.value;
+        if (!fromId || !toId) {
           mergeMessage.textContent = "Select both source and target customers.";
           return;
         }
-        if (fromName === toName) {
+        if (fromId === toId) {
           mergeMessage.textContent = "Source and target must be different.";
           return;
         }
+        const fromCustomer = state.customers.find((c) => String(c.id) === String(fromId));
+        const toCustomer = state.customers.find((c) => String(c.id) === String(toId));
+        const fromName = fromCustomer ? fromCustomer.display_name : `ID ${fromId}`;
+        const toName = toCustomer ? toCustomer.display_name : `ID ${toId}`;
 
         mergeButton.disabled = true;
         mergeButton.textContent = "Merging...";
@@ -470,7 +477,7 @@
           const res = await fetch("/api/merge-mappings", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ from_name: fromName, to_name: toName }),
+            body: JSON.stringify({ from_id: Number(fromId), to_id: Number(toId), from_name: fromName, to_name: toName }),
           });
           let data = null;
           const contentType = res.headers.get("content-type") || "";
