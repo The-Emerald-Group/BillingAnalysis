@@ -1272,10 +1272,28 @@ def api_platform_options():
     for link in links:
         linked_keys.add(resolve_merge_key(str(link.get("nable_key") or ""), merge_mappings))
         linked_keys.add(resolve_merge_key(str(link.get("sophos_key") or ""), merge_mappings))
+    auto_paired_keys = set()
 
     with db_lock:
         conn = get_conn()
         cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT normalized_key, nable_source_name, sophos_source_name
+            FROM customers
+            WHERE nable_source_name IS NOT NULL
+              AND TRIM(nable_source_name) <> ''
+              AND sophos_source_name IS NOT NULL
+              AND TRIM(sophos_source_name) <> ''
+            """
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        for row in rows:
+            nkey = resolve_merge_key(normalize_customer_name(str(row.get("nable_source_name") or "")), merge_mappings)
+            skey = resolve_merge_key(normalize_customer_name(str(row.get("sophos_source_name") or "")), merge_mappings)
+            if nkey and skey and nkey == skey:
+                auto_paired_keys.add(resolve_merge_key(str(row.get("normalized_key") or ""), merge_mappings))
+
         cur.execute(
             """
             SELECT DISTINCT nable_source_name
@@ -1303,10 +1321,12 @@ def api_platform_options():
         nable = [
             n for n in nable_all
             if resolve_merge_key(normalize_customer_name(str(n)), merge_mappings) not in linked_keys
+            and resolve_merge_key(normalize_customer_name(str(n)), merge_mappings) not in auto_paired_keys
         ]
         sophos = [
             s for s in sophos_all
             if resolve_merge_key(normalize_customer_name(str(s)), merge_mappings) not in linked_keys
+            and resolve_merge_key(normalize_customer_name(str(s)), merge_mappings) not in auto_paired_keys
         ]
 
     return jsonify({"nable": nable, "sophos": sophos, "include_linked": include_linked})
