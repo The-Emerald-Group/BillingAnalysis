@@ -632,6 +632,106 @@ def upsert_counts(
         conn.close()
 
 
+def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
+    merged = {"from_customer_removed": 0, "target_updated": 0}
+    if not from_key or not to_key or from_key == to_key:
+        return merged
+
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("SELECT id, display_name, nable_source_name, sophos_source_name FROM customers WHERE normalized_key = ?", (from_key,))
+        from_customer = cur.fetchone()
+        cur.execute("SELECT id, display_name, nable_source_name, sophos_source_name FROM customers WHERE normalized_key = ?", (to_key,))
+        to_customer = cur.fetchone()
+
+        if not from_customer:
+            conn.close()
+            return merged
+
+        if not to_customer:
+            cur.execute(
+                """
+                INSERT INTO customers (display_name, normalized_key, nable_source_name, sophos_source_name)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    from_customer["display_name"],
+                    to_key,
+                    from_customer["nable_source_name"],
+                    from_customer["sophos_source_name"],
+                ),
+            )
+            cur.execute("SELECT id, display_name, nable_source_name, sophos_source_name FROM customers WHERE normalized_key = ?", (to_key,))
+            to_customer = cur.fetchone()
+
+        cur.execute(
+            """
+            SELECT nable_count, sophos_count, has_nable, has_sophos, last_synced_at
+            FROM customer_counts_latest
+            WHERE customer_id = ?
+            """,
+            (from_customer["id"],),
+        )
+        from_latest = cur.fetchone()
+        cur.execute(
+            """
+            SELECT nable_count, sophos_count, has_nable, has_sophos, last_synced_at
+            FROM customer_counts_latest
+            WHERE customer_id = ?
+            """,
+            (to_customer["id"],),
+        )
+        to_latest = cur.fetchone()
+
+        from_nable = int((from_latest["nable_count"] if from_latest else 0) or 0)
+        from_sophos = int((from_latest["sophos_count"] if from_latest else 0) or 0)
+        to_nable = int((to_latest["nable_count"] if to_latest else 0) or 0)
+        to_sophos = int((to_latest["sophos_count"] if to_latest else 0) or 0)
+        merged_nable = from_nable + to_nable
+        merged_sophos = from_sophos + to_sophos
+        merged_synced = utc_now_iso()
+
+        cur.execute(
+            """
+            INSERT INTO customer_counts_latest
+                (customer_id, nable_count, sophos_count, has_nable, has_sophos, last_synced_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(customer_id) DO UPDATE SET
+                nable_count=excluded.nable_count,
+                sophos_count=excluded.sophos_count,
+                has_nable=excluded.has_nable,
+                has_sophos=excluded.has_sophos,
+                last_synced_at=excluded.last_synced_at
+            """,
+            (
+                to_customer["id"],
+                merged_nable,
+                merged_sophos,
+                1 if merged_nable > 0 else 0,
+                1 if merged_sophos > 0 else 0,
+                merged_synced,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO customer_count_history (customer_id, nable_count, sophos_count, captured_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (to_customer["id"], merged_nable, merged_sophos, merged_synced),
+        )
+
+        cur.execute("DELETE FROM customer_counts_latest WHERE customer_id = ?", (from_customer["id"],))
+        cur.execute("DELETE FROM customers WHERE id = ?", (from_customer["id"],))
+        merged["from_customer_removed"] = 1
+        merged["target_updated"] = 1
+
+        conn.commit()
+        conn.close()
+    return merged
+
+
 def run_sync(trigger: str = "scheduled") -> Tuple[bool, str, Dict]:
     if not sync_lock.acquire(blocking=False):
         return False, "Sync already in progress", {"errors": {"sync": "Sync already in progress"}}
@@ -955,6 +1055,7 @@ def api_create_merge_mapping():
         conn.commit()
         conn.close()
 
+    merge_result = apply_merge_to_cached_data(from_key, to_key)
     success, message, details = run_sync("manual-merge")
     code = 200 if success else 500
     return jsonify(
@@ -963,6 +1064,7 @@ def api_create_merge_mapping():
             "message": message,
             "details": details,
             "mapping": {"from_key": from_key, "to_key": to_key},
+            "merge_result": merge_result,
         }
     ), code
 
