@@ -982,6 +982,49 @@ def dedupe_customers_by_display_name() -> Dict[str, int]:
     return result
 
 
+def purge_empty_duplicate_customer_rows() -> Dict[str, int]:
+    result = {"groups_processed": 0, "rows_removed": 0}
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                c.id,
+                c.display_name,
+                l.nable_count,
+                l.sophos_count
+            FROM customers c
+            INNER JOIN customer_counts_latest l ON l.customer_id = c.id
+            ORDER BY c.id
+            """
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        groups: Dict[str, List[Dict]] = {}
+        for row in rows:
+            group_key = normalize_customer_name(str(row.get("display_name") or ""))
+            if group_key:
+                groups.setdefault(group_key, []).append(row)
+
+        for members in groups.values():
+            if len(members) <= 1:
+                continue
+            active_rows = [m for m in members if int(m.get("nable_count") or 0) > 0 or int(m.get("sophos_count") or 0) > 0]
+            if not active_rows:
+                continue
+            result["groups_processed"] += 1
+            stale_rows = [m for m in members if int(m.get("nable_count") or 0) == 0 and int(m.get("sophos_count") or 0) == 0]
+            for stale in stale_rows:
+                cur.execute("DELETE FROM customer_counts_latest WHERE customer_id = ?", (stale["id"],))
+                cur.execute("DELETE FROM customer_count_history WHERE customer_id = ?", (stale["id"],))
+                cur.execute("DELETE FROM customers WHERE id = ?", (stale["id"],))
+                result["rows_removed"] += 1
+
+        conn.commit()
+        conn.close()
+    return result
+
+
 def reset_merge_state_and_cached_data() -> None:
     with db_lock:
         conn = get_conn()
@@ -1612,6 +1655,13 @@ def api_create_merge_mapping():
 def api_dedupe_display_names():
     summary = dedupe_customers_by_display_name()
     return jsonify({"success": True, "summary": summary}), 200
+
+
+@app.route("/api/maintenance/purge-empty-duplicates", methods=["POST"])
+def api_purge_empty_duplicates():
+    summary = purge_empty_duplicate_customer_rows()
+    trigger_sync_async("maintenance-purge-empty-duplicates")
+    return jsonify({"success": True, "message": "Empty duplicate cleanup complete. Sync started.", "summary": summary}), 202
 
 
 @app.route("/api/maintenance/reset-merges", methods=["POST"])

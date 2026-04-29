@@ -83,6 +83,7 @@
         </div>
         <div class="controls">
           <button id="dedupeBtn" class="button" type="button">Cleanup Duplicate Names</button>
+          <button id="purgeEmptyBtn" class="button" type="button">Purge Empty Duplicate Rows</button>
           <button id="resetBtn" class="button danger" type="button">Reset Merges + Rebuild Cache</button>
         </div>
         <div id="msg" class="msg"></div>
@@ -105,6 +106,7 @@
       const linkBtn = document.getElementById("linkBtn");
       const showLinkedToggle = document.getElementById("showLinkedToggle");
       const dedupeBtn = document.getElementById("dedupeBtn");
+      const purgeEmptyBtn = document.getElementById("purgeEmptyBtn");
       const resetBtn = document.getElementById("resetBtn");
       const msg = document.getElementById("msg");
       const linksBody = document.getElementById("linksBody");
@@ -239,6 +241,24 @@
         }
       }
 
+      async function purgeEmptyDuplicates() {
+        purgeEmptyBtn.disabled = true;
+        try {
+          const res = await fetch("/api/maintenance/purge-empty-duplicates", { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) {
+            msg.textContent = data.error || "Cleanup failed.";
+            return;
+          }
+          msg.textContent = `Empty duplicate cleanup complete. Groups: ${data.summary?.groups_processed || 0}, rows removed: ${data.summary?.rows_removed || 0}.`;
+          await Promise.all([loadOptions(), loadLinks()]);
+        } catch (err) {
+          msg.textContent = `Cleanup failed: ${err}`;
+        } finally {
+          purgeEmptyBtn.disabled = false;
+        }
+      }
+
       async function resetAll() {
         if (!window.confirm("Reset all merges/links and rebuild cache?")) return;
         resetBtn.disabled = true;
@@ -263,6 +283,7 @@
       linkBtn.addEventListener("click", createLink);
       showLinkedToggle.addEventListener("change", loadOptions);
       dedupeBtn.addEventListener("click", dedupe);
+      purgeEmptyBtn.addEventListener("click", purgeEmptyDuplicates);
       resetBtn.addEventListener("click", resetAll);
 
       (async () => {
