@@ -799,6 +799,17 @@ def run_sync(trigger: str = "scheduled") -> Tuple[bool, str, Dict]:
         sync_lock.release()
 
 
+def trigger_sync_async(trigger: str = "manual") -> None:
+    def _runner():
+        try:
+            run_sync(trigger)
+        except Exception as exc:
+            logger.exception("Async sync trigger=%s failed: %s", trigger, exc)
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+
+
 def has_cached_rows() -> bool:
     with db_lock:
         conn = get_conn()
@@ -1008,9 +1019,8 @@ def api_sync_status():
 
 @app.route("/api/sync/run", methods=["POST"])
 def api_sync_run():
-    success, message, details = run_sync("manual")
-    code = 200 if success else 500
-    return jsonify({"success": success, "message": message, "details": details}), code
+    trigger_sync_async("manual")
+    return jsonify({"success": True, "message": "Sync started", "details": {}}), 202
 
 
 @app.route("/api/merge-mappings", methods=["GET"])
@@ -1079,17 +1089,16 @@ def api_create_merge_mapping():
         conn.close()
 
     merge_result = apply_merge_to_cached_data(from_key, to_key)
-    success, message, details = run_sync("manual-merge")
-    code = 200 if success else 500
+    trigger_sync_async("manual-merge")
     return jsonify(
         {
-            "success": success,
-            "message": message,
-            "details": details,
+            "success": True,
+            "message": "Merge applied and sync started",
+            "details": {},
             "mapping": {"from_key": from_key, "to_key": to_key},
             "merge_result": merge_result,
         }
-    ), code
+    ), 202
 
 
 if __name__ == "__main__":

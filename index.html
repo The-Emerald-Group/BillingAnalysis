@@ -452,6 +452,11 @@
           refreshButton.textContent = "Run Sync";
           await loadStatus();
           await loadCustomers();
+          // Sync runs async now; refresh once more shortly after kickoff.
+          setTimeout(async () => {
+            await loadStatus();
+            await loadCustomers();
+          }, 3500);
         }
       }
 
@@ -494,6 +499,11 @@
           mergeMessage.textContent = `Merged "${fromName}" into "${toName}".`;
           await loadStatus();
           await loadCustomers();
+          // Merge now starts sync async, so refresh after a short delay too.
+          setTimeout(async () => {
+            await loadStatus();
+            await loadCustomers();
+          }, 3500);
         } catch (err) {
           mergeMessage.textContent = `Merge request failed: ${err}`;
         } finally {
