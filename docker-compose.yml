@@ -1,6 +1,6 @@
 services:
   billing-portal:
-    build: .
+    image: ghcr.io/the-emerald-group/billinganalysis:latest
     container_name: billing-portal
     environment:
       - PORT=8083

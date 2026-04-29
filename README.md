@@ -89,10 +89,10 @@ This repo includes `.github/workflows/docker-build.yml` to match your other proj
 
 - Builds on `main`, tags (`v*`), PRs, and manual dispatch.
 - Multi-arch build target: `linux/amd64` and `linux/arm64`.
-- Pushes images for non-PR runs.
+- Pushes images to GitHub Container Registry (`ghcr.io`) for non-PR runs.
 
-Set these repository secrets in GitHub:
+The workflow uses the built-in `GITHUB_TOKEN` (with `packages: write`) and publishes to:
 
-- `DOCKERHUB_USERNAME`
-- `DOCKERHUB_TOKEN`
-- `DOCKERHUB_IMAGE` (for example: `samuelstreets/general-billing-portal`)
+- `ghcr.io/<owner>/<repo>:latest`
+- `ghcr.io/<owner>/<repo>:<tag>`
+- `ghcr.io/<owner>/<repo>:sha-<commit>`
