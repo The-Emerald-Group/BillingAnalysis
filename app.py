@@ -33,6 +33,7 @@ SOPHOS_TOKEN_URL = os.environ.get(
 REQUEST_TIMEOUT_SECONDS = int(os.environ.get("REQUEST_TIMEOUT_SECONDS", "30"))
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
 RETRY_DELAY_SECONDS = float(os.environ.get("RETRY_DELAY_SECONDS", "1.5"))
+SOPHOS_RECENTLY_ONLINE_DAYS = int(os.environ.get("SOPHOS_RECENTLY_ONLINE_DAYS", "30"))
 
 
 app = Flask(__name__, static_folder="assets")
@@ -76,6 +77,24 @@ BUSINESS_STOPWORDS = {
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def parse_iso_utc(raw: str):
+    if not raw:
+        return None
+    try:
+        # Handle trailing Z from API timestamps.
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def is_recently_online(last_seen_at: str) -> bool:
+    seen_dt = parse_iso_utc(last_seen_at)
+    if not seen_dt:
+        return False
+    age = datetime.now(timezone.utc) - seen_dt.astimezone(timezone.utc)
+    return age.total_seconds() <= (SOPHOS_RECENTLY_ONLINE_DAYS * 86400)
 
 
 def singularize_token(token: str) -> str:
@@ -334,7 +353,7 @@ def fetch_sophos_token() -> str:
 
 
 def fetch_sophos_counts() -> Dict[str, Dict]:
-    logger.info("Starting Sophos count sync.")
+    logger.info("Starting Sophos count sync recently_online_days=%s", SOPHOS_RECENTLY_ONLINE_DAYS)
     token = fetch_sophos_token()
     merge_mappings = load_merge_mappings()
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -387,17 +406,25 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
         endpoint_url = f"{tenant_api_host}/endpoint/v1/endpoints"
         count = 0
         try:
-            endpoint_resp = request_with_retry(
-                "GET",
-                endpoint_url,
-                headers={**headers, "X-Tenant-ID": tenant_id},
-                params={"pageSize": 1, "view": "full", "pageTotal": "true"},
-            )
-            endpoint_payload = endpoint_resp.json()
-            pages = endpoint_payload.get("pages") or {}
-            count = pages.get("total") or len(endpoint_payload.get("items") or [])
-            if not isinstance(count, int):
-                count = 0
+            next_key = None
+            while True:
+                params = {"pageSize": 500, "view": "full"}
+                if next_key:
+                    params = {"pageFromKey": next_key, "pageSize": 500, "view": "full"}
+                endpoint_resp = request_with_retry(
+                    "GET",
+                    endpoint_url,
+                    headers={**headers, "X-Tenant-ID": tenant_id},
+                    params=params,
+                )
+                endpoint_payload = endpoint_resp.json()
+                items = endpoint_payload.get("items") or []
+                for item in items:
+                    if is_recently_online(item.get("lastSeenAt")):
+                        count += 1
+                next_key = ((endpoint_payload.get("pages") or {}).get("nextKey"))
+                if not next_key:
+                    break
         except Exception as exc:
             logger.warning("Sophos tenant endpoint count failed tenant=%s tenant_id=%s error=%s", tenant_name, tenant_id, exc)
             count = 0
@@ -463,6 +490,8 @@ def fetch_sophos_tenant_device_names(token: str, tenant: Dict) -> List[str]:
         payload = resp.json()
         items = payload.get("items") or []
         for item in items:
+            if not is_recently_online(item.get("lastSeenAt")):
+                continue
             host = item.get("hostname")
             if isinstance(host, str) and host.strip():
                 names.append(host.strip())

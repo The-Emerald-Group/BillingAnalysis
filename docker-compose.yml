@@ -11,6 +11,7 @@ services:
       - NABLE_DEVICES_PATH=/api/devices
       - SOPHOS_CLIENT_ID=your_sophos_client_id_here
       - SOPHOS_CLIENT_SECRET=your_sophos_client_secret_here
+      - SOPHOS_RECENTLY_ONLINE_DAYS=30
       - REQUEST_TIMEOUT_SECONDS=30
       - MAX_RETRIES=3
       - RETRY_DELAY_SECONDS=1.5

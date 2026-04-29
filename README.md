@@ -44,6 +44,7 @@ docker compose up -d --build
 | `SOPHOS_CLIENT_ID` | required | Sophos API client ID |
 | `SOPHOS_CLIENT_SECRET` | required | Sophos API client secret |
 | `SOPHOS_TOKEN_URL` | `https://id.sophos.com/api/v2/oauth2/token` | Sophos OAuth token endpoint |
+| `SOPHOS_RECENTLY_ONLINE_DAYS` | `30` | Only include Sophos endpoints seen in this many days |
 | `REQUEST_TIMEOUT_SECONDS` | `30` | HTTP timeout per call |
 | `MAX_RETRIES` | `3` | Retry attempts for API requests |
 | `RETRY_DELAY_SECONDS` | `1.5` | Backoff multiplier between retries |
@@ -52,9 +53,10 @@ docker compose up -d --build
 
 1. Fetch all N-able devices and group by customer name.
 2. Fetch Sophos tenants, then fetch endpoint totals per tenant.
-3. Normalize customer names and merge cross-platform records.
-4. Upsert `latest` counts and append a timestamped history snapshot.
-5. Keep serving cached data even if a later sync fails.
+3. Count only Sophos endpoints that are recently online (based on `lastSeenAt`).
+4. Normalize customer names and merge cross-platform records.
+5. Upsert `latest` counts and append a timestamped history snapshot.
+6. Keep serving cached data even if a later sync fails.
 
 ## API Endpoints
 
