@@ -32,6 +32,7 @@
       .row:last-child { border-bottom:none; }
       .row.selected { background:#10203a; border-left:3px solid #60a5fa; }
       .controls { margin-top: 12px; display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
+      .controls label { font-size: 13px; color: #cbd5e1; }
       input[type="text"] {
         padding: 8px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; min-width: 260px;
       }
@@ -39,6 +40,14 @@
       table { width:100%; border-collapse: collapse; font-size: 13px; }
       th, td { border-bottom:1px solid #1f2937; padding: 8px; text-align:left; }
       .danger { color: #fca5a5; }
+      .link-delete {
+        border:1px solid #7f1d1d;
+        background:#3f1010;
+        color:#fecaca;
+        padding:4px 8px;
+        border-radius:6px;
+        cursor:pointer;
+      }
     </style>
   </head>
   <body>
@@ -66,6 +75,9 @@
         <h3 style="margin:0 0 8px;">Create Platform Link</h3>
         <div class="muted">Pick one N-able and one Sophos customer, then link them into one canonical company.</div>
         <div class="controls">
+          <label><input id="showLinkedToggle" type="checkbox" /> Show already linked names</label>
+        </div>
+        <div class="controls">
           <input id="canonicalName" type="text" placeholder="Canonical company name (optional)" />
           <button id="linkBtn" class="button primary" type="button">Link Selected</button>
         </div>
@@ -79,7 +91,7 @@
       <section class="panel" style="margin-top:14px;">
         <h3 style="margin:0 0 8px;">Current Platform Links</h3>
         <table>
-          <thead><tr><th>ID</th><th>N-able Key</th><th>Sophos Key</th><th>Canonical</th></tr></thead>
+          <thead><tr><th>ID</th><th>N-able Key</th><th>Sophos Key</th><th>Canonical</th><th>Action</th></tr></thead>
           <tbody id="linksBody"></tbody>
         </table>
       </section>
@@ -91,6 +103,7 @@
       const sophosList = document.getElementById("sophosList");
       const canonicalName = document.getElementById("canonicalName");
       const linkBtn = document.getElementById("linkBtn");
+      const showLinkedToggle = document.getElementById("showLinkedToggle");
       const dedupeBtn = document.getElementById("dedupeBtn");
       const resetBtn = document.getElementById("resetBtn");
       const msg = document.getElementById("msg");
@@ -123,7 +136,8 @@
       }
 
       async function loadOptions() {
-        const res = await fetch("/api/platform-options");
+        const includeLinked = showLinkedToggle.checked ? "true" : "false";
+        const res = await fetch(`/api/platform-options?include_linked=${includeLinked}`);
         if (!res.ok) return;
         const data = await res.json();
         state.nable = data.nable || [];
@@ -138,7 +152,43 @@
         if (!res.ok) return;
         const data = await res.json();
         const rows = data.items || [];
-        linksBody.innerHTML = rows.map((r) => `<tr><td>${r.id}</td><td>${r.nable_key}</td><td>${r.sophos_key}</td><td>${r.canonical_name}</td></tr>`).join("");
+        linksBody.innerHTML = rows.map((r) => (
+          `<tr>
+             <td>${r.id}</td>
+             <td>${r.nable_key}</td>
+             <td>${r.sophos_key}</td>
+             <td>${r.canonical_name}</td>
+             <td><button class="link-delete" data-link-id="${r.id}" type="button">Delete</button></td>
+           </tr>`
+        )).join("");
+        bindDeleteButtons();
+      }
+
+      function bindDeleteButtons() {
+        document.querySelectorAll(".link-delete").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const linkId = btn.getAttribute("data-link-id");
+            if (!linkId) return;
+            const ok = window.confirm("Delete this platform link and re-sync?");
+            if (!ok) return;
+            btn.disabled = true;
+            try {
+              const res = await fetch(`/api/platform-links/${linkId}`, { method: "DELETE" });
+              const data = await res.json();
+              if (!res.ok) {
+                msg.textContent = data.error || "Delete failed.";
+                btn.disabled = false;
+                return;
+              }
+              msg.textContent = "Platform link deleted. Sync started.";
+              await Promise.all([loadOptions(), loadLinks()]);
+            } catch (err) {
+              msg.textContent = `Delete failed: ${err}`;
+            } finally {
+              btn.disabled = false;
+            }
+          });
+        });
       }
 
       async function createLink() {
@@ -211,6 +261,7 @@
       }
 
       linkBtn.addEventListener("click", createLink);
+      showLinkedToggle.addEventListener("change", loadOptions);
       dedupeBtn.addEventListener("click", dedupe);
       resetBtn.addEventListener("click", resetAll);
 

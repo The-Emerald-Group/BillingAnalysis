@@ -1265,29 +1265,62 @@ def api_merge_mappings():
 
 @app.route("/api/platform-options", methods=["GET"])
 def api_platform_options():
+    include_linked = (request.args.get("include_linked") or "false").strip().lower() == "true"
     with db_lock:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT DISTINCT nable_source_name
-            FROM customers
-            WHERE nable_source_name IS NOT NULL AND TRIM(nable_source_name) <> ''
-            ORDER BY nable_source_name COLLATE NOCASE ASC
-            """
-        )
+        if include_linked:
+            cur.execute(
+                """
+                SELECT DISTINCT nable_source_name
+                FROM customers
+                WHERE nable_source_name IS NOT NULL AND TRIM(nable_source_name) <> ''
+                ORDER BY nable_source_name COLLATE NOCASE ASC
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT DISTINCT c.nable_source_name
+                FROM customers c
+                WHERE c.nable_source_name IS NOT NULL
+                  AND TRIM(c.nable_source_name) <> ''
+                  AND c.normalized_key NOT IN (
+                      SELECT nable_key FROM platform_links
+                      UNION
+                      SELECT sophos_key FROM platform_links
+                  )
+                ORDER BY c.nable_source_name COLLATE NOCASE ASC
+                """
+            )
         nable = [r[0] for r in cur.fetchall()]
-        cur.execute(
-            """
-            SELECT DISTINCT sophos_source_name
-            FROM customers
-            WHERE sophos_source_name IS NOT NULL AND TRIM(sophos_source_name) <> ''
-            ORDER BY sophos_source_name COLLATE NOCASE ASC
-            """
-        )
+        if include_linked:
+            cur.execute(
+                """
+                SELECT DISTINCT sophos_source_name
+                FROM customers
+                WHERE sophos_source_name IS NOT NULL AND TRIM(sophos_source_name) <> ''
+                ORDER BY sophos_source_name COLLATE NOCASE ASC
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT DISTINCT c.sophos_source_name
+                FROM customers c
+                WHERE c.sophos_source_name IS NOT NULL
+                  AND TRIM(c.sophos_source_name) <> ''
+                  AND c.normalized_key NOT IN (
+                      SELECT nable_key FROM platform_links
+                      UNION
+                      SELECT sophos_key FROM platform_links
+                  )
+                ORDER BY c.sophos_source_name COLLATE NOCASE ASC
+                """
+            )
         sophos = [r[0] for r in cur.fetchall()]
         conn.close()
-    return jsonify({"nable": nable, "sophos": sophos})
+    return jsonify({"nable": nable, "sophos": sophos, "include_linked": include_linked})
 
 
 @app.route("/api/platform-links", methods=["GET"])
@@ -1339,6 +1372,24 @@ def api_create_platform_link():
             "collapse_summary": collapse_summary,
         }
     ), 202
+
+
+@app.route("/api/platform-links/<int:link_id>", methods=["DELETE"])
+def api_delete_platform_link(link_id: int):
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM platform_links WHERE id = ?", (link_id,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"error": "Platform link not found"}), 404
+        cur.execute("DELETE FROM platform_links WHERE id = ?", (link_id,))
+        conn.commit()
+        conn.close()
+
+    trigger_sync_async("platform-link-delete")
+    return jsonify({"success": True, "message": "Platform link deleted and sync started"}), 202
 
 
 @app.route("/api/merge-mappings", methods=["POST"])
