@@ -317,8 +317,11 @@
       .compare-row-match {
         background: rgba(22, 163, 74, 0.14);
       }
-      .compare-row-mismatch {
-        background: rgba(220, 38, 38, 0.14);
+      .compare-row-missing-sophos {
+        background: rgba(124, 58, 237, 0.16);
+      }
+      .compare-row-missing-nable {
+        background: rgba(37, 99, 235, 0.16);
       }
       .status-chip {
         border-radius: 999px;
@@ -329,6 +332,14 @@
       .status-chip.match {
         color: #86efac;
         border-color: #166534;
+      }
+      .status-chip.missing-sophos {
+        color: #ddd6fe;
+        border-color: #6d28d9;
+      }
+      .status-chip.missing-nable {
+        color: #bfdbfe;
+        border-color: #1d4ed8;
       }
       .status-chip.mismatch {
         color: #fecaca;
@@ -701,9 +712,16 @@
           return;
         }
         compareRowsBody.innerHTML = visibleRows.map((r) => {
-          const mismatch = r.status !== "match";
-          const rowClass = mismatch ? "compare-row-mismatch" : "compare-row-match";
-          const chipClass = mismatch ? "status-chip mismatch" : "status-chip match";
+          const rowClass = r.status === "missing_from_sophos"
+            ? "compare-row-missing-sophos"
+            : r.status === "missing_from_nable"
+              ? "compare-row-missing-nable"
+              : "compare-row-match";
+          const chipClass = r.status === "missing_from_sophos"
+            ? "status-chip missing-sophos"
+            : r.status === "missing_from_nable"
+              ? "status-chip missing-nable"
+              : "status-chip match";
           const label = r.status === "missing_from_sophos"
             ? "Missing from Sophos"
             : r.status === "missing_from_nable"
