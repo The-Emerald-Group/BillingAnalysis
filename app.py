@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -37,12 +38,19 @@ app = Flask(__name__, static_folder="assets")
 db_lock = threading.Lock()
 sync_lock = threading.Lock()
 
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="[%(asctime)s] %(levelname)s %(message)s",
+)
+logger = logging.getLogger("billing-portal")
+
 runtime_state = {
     "sync_running": False,
     "last_sync_started_at": None,
     "last_sync_finished_at": None,
     "last_sync_status": "never",
     "last_sync_error": None,
+    "last_sync_details": {},
 }
 
 
@@ -122,6 +130,7 @@ def request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
     last_error = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
+            logger.debug("HTTP %s %s attempt=%s", method, url, attempt)
             response = requests.request(
                 method,
                 url,
@@ -132,9 +141,10 @@ def request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
             return response
         except Exception as exc:
             last_error = exc
+            logger.warning("HTTP request failed method=%s url=%s attempt=%s error=%s", method, url, attempt, exc)
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_DELAY_SECONDS * attempt)
-    raise RuntimeError(f"Request failed after retries for {url}: {last_error}")
+    raise RuntimeError(f"Request failed after retries method={method} url={url}: {last_error}")
 
 
 def extract_nable_customer_name(device: Dict) -> str:
@@ -176,6 +186,7 @@ def fetch_nable_access_token() -> str:
     token = ((payload.get("tokens") or {}).get("access") or {}).get("token")
     if not token:
         raise RuntimeError("N-able authenticate response missing access token")
+    logger.info("N-able auth succeeded.")
     return token
 
 
@@ -195,10 +206,12 @@ def fetch_all_nable_devices(access_token: str) -> List[Dict]:
         else:
             next_url = None
 
+    logger.info("N-able device fetch complete total_devices=%s", len(devices))
     return devices
 
 
 def fetch_nable_counts() -> Dict[str, Dict]:
+    logger.info("Starting N-able count sync base=%s auth_path=%s devices_path=%s", NABLE_API_BASE, NABLE_AUTH_PATH, NABLE_DEVICES_PATH)
     access_token = fetch_nable_access_token()
     devices = fetch_all_nable_devices(access_token)
 
@@ -214,6 +227,7 @@ def fetch_nable_counts() -> Dict[str, Dict]:
         if len(raw_name) > len(counts[normalized]["display_name"]):
             counts[normalized]["display_name"] = raw_name
 
+    logger.info("N-able customer count aggregation complete customers=%s", len(counts))
     return counts
 
 
@@ -236,10 +250,12 @@ def fetch_sophos_token() -> str:
     token = payload.get("access_token")
     if not token:
         raise RuntimeError("Sophos auth response missing access_token")
+    logger.info("Sophos auth succeeded.")
     return token
 
 
 def fetch_sophos_counts() -> Dict[str, Dict]:
+    logger.info("Starting Sophos count sync.")
     token = fetch_sophos_token()
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
@@ -256,6 +272,7 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
     partner_host = "https://api.central.sophos.com"
     if not partner_id:
         raise RuntimeError("Sophos whoami response missing partner id")
+    logger.info("Sophos whoami succeeded partner_id=%s", partner_id)
 
     tenants: List[Dict] = []
     page = 1
@@ -277,6 +294,7 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
         if page >= total_pages:
             break
         page += 1
+    logger.info("Sophos tenant fetch complete tenants=%s", len(tenants))
 
     counts: Dict[str, Dict] = {}
     for tenant in tenants:
@@ -300,7 +318,8 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
             count = pages.get("total") or len(endpoint_payload.get("items") or [])
             if not isinstance(count, int):
                 count = 0
-        except Exception:
+        except Exception as exc:
+            logger.warning("Sophos tenant endpoint count failed tenant=%s tenant_id=%s error=%s", tenant_name, tenant_id, exc)
             count = 0
 
         normalized = normalize_customer_name(tenant_name)
@@ -313,6 +332,7 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
         if len(tenant_name) > len(counts[normalized]["display_name"]):
             counts[normalized]["display_name"] = tenant_name
 
+    logger.info("Sophos customer count aggregation complete customers=%s", len(counts))
     return counts
 
 
@@ -397,7 +417,7 @@ def upsert_counts(nable_counts: Dict[str, Dict], sophos_counts: Dict[str, Dict],
         conn.close()
 
 
-def run_sync(trigger: str = "scheduled") -> Tuple[bool, str]:
+def run_sync(trigger: str = "scheduled") -> Tuple[bool, str, Dict]:
     if not sync_lock.acquire(blocking=False):
         return False, "Sync already in progress"
 
@@ -406,24 +426,59 @@ def run_sync(trigger: str = "scheduled") -> Tuple[bool, str]:
     runtime_state["last_sync_started_at"] = started_at
     runtime_state["last_sync_status"] = "running"
     runtime_state["last_sync_error"] = None
+    runtime_state["last_sync_details"] = {}
+    logger.info("Sync started trigger=%s", trigger)
 
     try:
-        nable_counts = fetch_nable_counts()
-        sophos_counts = fetch_sophos_counts()
+        nable_counts: Dict[str, Dict] = {}
+        sophos_counts: Dict[str, Dict] = {}
+        provider_errors: Dict[str, str] = {}
+
+        try:
+            nable_counts = fetch_nable_counts()
+        except Exception as exc:
+            provider_errors["nable"] = str(exc)
+            logger.exception("N-able sync failed: %s", exc)
+
+        try:
+            sophos_counts = fetch_sophos_counts()
+        except Exception as exc:
+            provider_errors["sophos"] = str(exc)
+            logger.exception("Sophos sync failed: %s", exc)
+
+        if not nable_counts and not sophos_counts:
+            combined = "Both provider syncs failed."
+            if provider_errors:
+                combined += " " + " | ".join([f"{k}: {v}" for k, v in provider_errors.items()])
+            raise RuntimeError(combined)
+
         synced_at = utc_now_iso()
         upsert_counts(nable_counts, sophos_counts, synced_at)
         runtime_state["last_sync_finished_at"] = synced_at
+        if provider_errors:
+            runtime_state["last_sync_status"] = "partial"
+            runtime_state["last_sync_error"] = "One or more providers failed during sync."
+            runtime_state["last_sync_details"] = provider_errors
+            msg = f"Sync partial ({trigger})"
+            write_sync_run(started_at, synced_at, "partial", json.dumps(provider_errors))
+            logger.warning("Sync partial trigger=%s errors=%s", trigger, provider_errors)
+            return True, msg, {"errors": provider_errors}
+
         runtime_state["last_sync_status"] = "ok"
+        runtime_state["last_sync_details"] = {}
         write_sync_run(started_at, synced_at, "ok", None)
-        return True, f"Sync complete ({trigger})"
+        logger.info("Sync completed successfully trigger=%s", trigger)
+        return True, f"Sync complete ({trigger})", {"errors": {}}
     except Exception as exc:
         finished_at = utc_now_iso()
         message = str(exc)
         runtime_state["last_sync_finished_at"] = finished_at
         runtime_state["last_sync_status"] = "error"
         runtime_state["last_sync_error"] = message
+        runtime_state["last_sync_details"] = {}
         write_sync_run(started_at, finished_at, "error", message)
-        return False, message
+        logger.exception("Sync failed trigger=%s error=%s", trigger, message)
+        return False, message, {"errors": {"sync": message}}
     finally:
         runtime_state["sync_running"] = False
         sync_lock.release()
@@ -539,9 +594,9 @@ def api_sync_status():
 
 @app.route("/api/sync/run", methods=["POST"])
 def api_sync_run():
-    success, message = run_sync("manual")
+    success, message, details = run_sync("manual")
     code = 200 if success else 500
-    return jsonify({"success": success, "message": message}), code
+    return jsonify({"success": success, "message": message, "details": details}), code
 
 
 if __name__ == "__main__":
