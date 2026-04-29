@@ -147,14 +147,15 @@ def apply_platform_links(nable_counts: Dict[str, Dict], sophos_counts: Dict[str,
     if not links:
         return nable_counts, sophos_counts
 
+    merge_mappings = load_merge_mappings()
     nable_result = dict(nable_counts)
     sophos_result = dict(sophos_counts)
     consumed_nable = set()
     consumed_sophos = set()
 
     for link in links:
-        nkey = str(link["nable_key"])
-        skey = str(link["sophos_key"])
+        nkey = resolve_merge_key(str(link["nable_key"]), merge_mappings)
+        skey = resolve_merge_key(str(link["sophos_key"]), merge_mappings)
         nentry = nable_counts.get(nkey)
         sentry = sophos_counts.get(skey)
         if not nentry and not sentry:
@@ -1211,8 +1212,9 @@ def api_create_platform_link():
     if not nable_name or not sophos_name:
         return jsonify({"error": "nable_name and sophos_name are required"}), 400
 
-    nable_key = normalize_customer_name(nable_name)
-    sophos_key = normalize_customer_name(sophos_name)
+    merge_mappings = load_merge_mappings()
+    nable_key = resolve_merge_key(normalize_customer_name(nable_name), merge_mappings)
+    sophos_key = resolve_merge_key(normalize_customer_name(sophos_name), merge_mappings)
     if not nable_key or not sophos_key:
         return jsonify({"error": "Unable to normalize one or both platform names"}), 400
     if not canonical_name:
