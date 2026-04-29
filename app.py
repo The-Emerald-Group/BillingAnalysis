@@ -56,20 +56,68 @@ runtime_state = {
     "last_sync_details": {},
 }
 
+BUSINESS_STOPWORDS = {
+    "ltd",
+    "limited",
+    "llc",
+    "inc",
+    "corp",
+    "co",
+    "company",
+    "services",
+    "service",
+    "management",
+    "financial",
+    "solutions",
+    "solution",
+    "group",
+}
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def singularize_token(token: str) -> str:
+    if token.endswith("ies") and len(token) > 4:
+        return token[:-3] + "y"
+    if token.endswith("s") and len(token) > 3 and not token.endswith("ss"):
+        return token[:-1]
+    return token
 
 
 def normalize_customer_name(name: str) -> str:
     lowered = (name or "").strip().lower()
     lowered = re.sub(r"[^\w\s]", " ", lowered)
     lowered = re.sub(r"\s+", " ", lowered).strip()
-    tokens = [t for t in lowered.split(" ") if t]
-    suffixes = {"ltd", "limited", "llc", "inc", "corp", "co"}
-    while tokens and tokens[-1] in suffixes:
-        tokens.pop()
-    return " ".join(tokens)
+    raw_tokens = [t for t in lowered.split(" ") if t]
+    tokens = []
+    for token in raw_tokens:
+        singular = singularize_token(token)
+        if singular in BUSINESS_STOPWORDS:
+            continue
+        tokens.append(singular)
+    # Fall back to cleaned name if everything was filtered.
+    return " ".join(tokens) if tokens else lowered
+
+
+def load_merge_mappings() -> Dict[str, str]:
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT from_key, to_key FROM merge_mappings")
+        rows = cur.fetchall()
+        conn.close()
+    return {str(r["from_key"]): str(r["to_key"]) for r in rows}
+
+
+def resolve_merge_key(key: str, mappings: Dict[str, str]) -> str:
+    current = key
+    seen = set()
+    while current in mappings and current not in seen:
+        seen.add(current)
+        current = mappings[current]
+    return current
 
 
 def ensure_db_dir() -> None:
@@ -123,6 +171,12 @@ def init_db() -> None:
                 status TEXT NOT NULL,
                 error_summary TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS merge_mappings (
+                from_key TEXT PRIMARY KEY,
+                to_key TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             """
         )
         conn.commit()
@@ -164,6 +218,19 @@ def extract_nable_customer_name(device: Dict) -> str:
     return "Unknown Customer"
 
 
+def extract_nable_device_name(device: Dict) -> str:
+    candidates = [
+        device.get("longName"),
+        device.get("name"),
+        device.get("deviceName"),
+        device.get("hostname"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return ""
+
+
 def extract_devices_from_response(payload) -> List[Dict]:
     if isinstance(payload, list):
         return [p for p in payload if isinstance(p, dict)]
@@ -173,6 +240,13 @@ def extract_devices_from_response(payload) -> List[Dict]:
             if isinstance(value, list):
                 return [v for v in value if isinstance(v, dict)]
     return []
+
+
+def normalize_device_name(name: str) -> str:
+    cleaned = (name or "").strip().lower()
+    cleaned = re.sub(r"\.local$|\.lan$|\.corp$|\.internal$", "", cleaned)
+    cleaned = re.sub(r"[^a-z0-9\-_.]", "", cleaned)
+    return cleaned
 
 
 def fetch_nable_access_token() -> str:
@@ -217,11 +291,13 @@ def fetch_nable_counts() -> Dict[str, Dict]:
     logger.info("Starting N-able count sync base=%s auth_path=%s devices_path=%s", NABLE_API_BASE, NABLE_AUTH_PATH, NABLE_DEVICES_PATH)
     access_token = fetch_nable_access_token()
     devices = fetch_all_nable_devices(access_token)
+    merge_mappings = load_merge_mappings()
 
     counts: Dict[str, Dict] = {}
     for device in devices:
         raw_name = extract_nable_customer_name(device)
         normalized = normalize_customer_name(raw_name)
+        normalized = resolve_merge_key(normalized, merge_mappings)
         if not normalized:
             continue
         if normalized not in counts:
@@ -260,6 +336,7 @@ def fetch_sophos_token() -> str:
 def fetch_sophos_counts() -> Dict[str, Dict]:
     logger.info("Starting Sophos count sync.")
     token = fetch_sophos_token()
+    merge_mappings = load_merge_mappings()
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
     whoami_resp = request_with_retry(
@@ -326,6 +403,7 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
             count = 0
 
         normalized = normalize_customer_name(tenant_name)
+        normalized = resolve_merge_key(normalized, merge_mappings)
         if not normalized:
             continue
 
@@ -337,6 +415,79 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
 
     logger.info("Sophos customer count aggregation complete customers=%s", len(counts))
     return counts
+
+
+def fetch_sophos_tenants(token: str, partner_id: str) -> List[Dict]:
+    partner_host = "https://api.central.sophos.com"
+    tenants: List[Dict] = []
+    page = 1
+    while True:
+        params = {"pageSize": 100}
+        if page == 1:
+            params["pageTotal"] = "true"
+        else:
+            params["page"] = page
+        tenants_resp = request_with_retry(
+            "GET",
+            f"{partner_host}/partner/v1/tenants",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json", "X-Partner-ID": partner_id},
+            params=params,
+        )
+        tenants_payload = tenants_resp.json()
+        tenants.extend(tenants_payload.get("items") or [])
+        total_pages = ((tenants_payload.get("pages") or {}).get("total")) or 1
+        if page >= total_pages:
+            break
+        page += 1
+    return tenants
+
+
+def fetch_sophos_tenant_device_names(token: str, tenant: Dict) -> List[str]:
+    names: List[str] = []
+    tenant_id = tenant.get("id")
+    api_host = (tenant.get("apiHost") or "https://api.central.sophos.com").rstrip("/")
+    if not tenant_id:
+        return names
+
+    next_key = None
+    while True:
+        params = {"pageSize": 500, "view": "full"}
+        if next_key:
+            params = {"pageFromKey": next_key, "pageSize": 500, "view": "full"}
+        resp = request_with_retry(
+            "GET",
+            f"{api_host}/endpoint/v1/endpoints",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json", "X-Tenant-ID": tenant_id},
+            params=params,
+        )
+        payload = resp.json()
+        items = payload.get("items") or []
+        for item in items:
+            host = item.get("hostname")
+            if isinstance(host, str) and host.strip():
+                names.append(host.strip())
+        next_key = ((payload.get("pages") or {}).get("nextKey"))
+        if not next_key:
+            break
+
+    return names
+
+
+def get_customer_by_id(customer_id: int):
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT c.id, c.display_name, c.normalized_key, c.nable_source_name, c.sophos_source_name
+            FROM customers c
+            WHERE c.id = ?
+            """,
+            (customer_id,),
+        )
+        row = cur.fetchone()
+        conn.close()
+    return dict(row) if row else None
 
 
 def write_sync_run(started_at: str, finished_at: str, status: str, error_summary: str = None) -> None:
@@ -354,11 +505,17 @@ def write_sync_run(started_at: str, finished_at: str, status: str, error_summary
         conn.close()
 
 
-def upsert_counts(nable_counts: Dict[str, Dict], sophos_counts: Dict[str, Dict], synced_at: str) -> None:
+def upsert_counts(
+    nable_counts: Dict[str, Dict],
+    sophos_counts: Dict[str, Dict],
+    synced_at: str,
+    prune_missing: bool = False,
+) -> None:
     all_keys = sorted(set(nable_counts.keys()) | set(sophos_counts.keys()))
     with db_lock:
         conn = get_conn()
         cur = conn.cursor()
+        touched_customer_ids = set()
 
         for key in all_keys:
             nable_entry = nable_counts.get(key)
@@ -394,6 +551,7 @@ def upsert_counts(nable_counts: Dict[str, Dict], sophos_counts: Dict[str, Dict],
             )
             cur.execute("SELECT id FROM customers WHERE normalized_key = ?", (key,))
             customer_id = cur.fetchone()[0]
+            touched_customer_ids.add(customer_id)
             cur.execute(
                 """
                 INSERT INTO customer_counts_latest
@@ -415,6 +573,31 @@ def upsert_counts(nable_counts: Dict[str, Dict], sophos_counts: Dict[str, Dict],
                 """,
                 (customer_id, nable_count, sophos_count, synced_at),
             )
+
+        if prune_missing:
+            cur.execute("SELECT customer_id FROM customer_counts_latest")
+            existing_ids = {int(r[0]) for r in cur.fetchall()}
+            stale_ids = existing_ids - touched_customer_ids
+            for stale_id in stale_ids:
+                cur.execute(
+                    """
+                    UPDATE customer_counts_latest
+                    SET nable_count = 0,
+                        sophos_count = 0,
+                        has_nable = 0,
+                        has_sophos = 0,
+                        last_synced_at = ?
+                    WHERE customer_id = ?
+                    """,
+                    (synced_at, stale_id),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO customer_count_history (customer_id, nable_count, sophos_count, captured_at)
+                    VALUES (?, 0, 0, ?)
+                    """,
+                    (stale_id, synced_at),
+                )
 
         conn.commit()
         conn.close()
@@ -456,7 +639,7 @@ def run_sync(trigger: str = "scheduled") -> Tuple[bool, str, Dict]:
             raise RuntimeError(combined)
 
         synced_at = utc_now_iso()
-        upsert_counts(nable_counts, sophos_counts, synced_at)
+        upsert_counts(nable_counts, sophos_counts, synced_at, prune_missing=(len(provider_errors) == 0))
         runtime_state["last_sync_finished_at"] = synced_at
         if provider_errors:
             runtime_state["last_sync_status"] = "partial"
@@ -516,6 +699,7 @@ def assets(filename):
 @app.route("/api/customers", methods=["GET"])
 def api_customers():
     search = (request.args.get("search") or "").strip().lower()
+    status_filter = (request.args.get("status") or "all").strip().lower()
     with db_lock:
         conn = get_conn()
         cur = conn.cursor()
@@ -530,7 +714,12 @@ def api_customers():
                 l.sophos_count,
                 l.has_nable,
                 l.has_sophos,
-                l.last_synced_at
+                l.last_synced_at,
+                CASE
+                    WHEN l.nable_count = l.sophos_count THEN 'match'
+                    ELSE 'mismatch'
+                END AS count_status,
+                ABS(l.nable_count - l.sophos_count) AS count_delta
             FROM customers c
             INNER JOIN customer_counts_latest l ON l.customer_id = c.id
             ORDER BY c.display_name COLLATE NOCASE ASC
@@ -541,6 +730,8 @@ def api_customers():
 
     if search:
         rows = [r for r in rows if search in (r["display_name"] or "").lower()]
+    if status_filter in {"match", "mismatch"}:
+        rows = [r for r in rows if r.get("count_status") == status_filter]
 
     return jsonify({"items": rows, "count": len(rows)})
 
@@ -561,7 +752,12 @@ def api_customer(customer_id: int):
                 l.sophos_count,
                 l.has_nable,
                 l.has_sophos,
-                l.last_synced_at
+                l.last_synced_at,
+                CASE
+                    WHEN l.nable_count = l.sophos_count THEN 'match'
+                    ELSE 'mismatch'
+                END AS count_status,
+                ABS(l.nable_count - l.sophos_count) AS count_delta
             FROM customers c
             INNER JOIN customer_counts_latest l ON l.customer_id = c.id
             WHERE c.id = ?
@@ -574,6 +770,74 @@ def api_customer(customer_id: int):
     if not row:
         return jsonify({"error": "Customer not found"}), 404
     return jsonify(dict(row))
+
+
+@app.route("/api/customers/<int:customer_id>/device-compare", methods=["GET"])
+def api_customer_device_compare(customer_id: int):
+    customer = get_customer_by_id(customer_id)
+    if not customer:
+        return jsonify({"error": "Customer not found"}), 404
+
+    normalized_target = customer["normalized_key"]
+    mappings = load_merge_mappings()
+    nable_names: List[str] = []
+    sophos_names: List[str] = []
+
+    # N-able side
+    try:
+        nable_token = fetch_nable_access_token()
+        nable_devices = fetch_all_nable_devices(nable_token)
+        for dev in nable_devices:
+            cname = extract_nable_customer_name(dev)
+            ckey = resolve_merge_key(normalize_customer_name(cname), mappings)
+            if ckey != normalized_target:
+                continue
+            dname = extract_nable_device_name(dev)
+            if dname:
+                nable_names.append(dname)
+    except Exception as exc:
+        logger.warning("Device compare N-able fetch failed customer_id=%s error=%s", customer_id, exc)
+
+    # Sophos side
+    try:
+        sophos_token = fetch_sophos_token()
+        whoami_resp = request_with_retry(
+            "GET",
+            "https://api.central.sophos.com/whoami/v1",
+            headers={"Authorization": f"Bearer {sophos_token}", "Accept": "application/json"},
+        )
+        whoami = whoami_resp.json()
+        partner_id = whoami.get("id")
+        if partner_id:
+            tenants = fetch_sophos_tenants(sophos_token, partner_id)
+            for tenant in tenants:
+                tenant_name = tenant.get("name", "")
+                tkey = resolve_merge_key(normalize_customer_name(tenant_name), mappings)
+                if tkey != normalized_target:
+                    continue
+                sophos_names.extend(fetch_sophos_tenant_device_names(sophos_token, tenant))
+    except Exception as exc:
+        logger.warning("Device compare Sophos fetch failed customer_id=%s error=%s", customer_id, exc)
+
+    nable_by_norm = {normalize_device_name(n): n for n in nable_names if normalize_device_name(n)}
+    sophos_by_norm = {normalize_device_name(n): n for n in sophos_names if normalize_device_name(n)}
+    nable_set = set(nable_by_norm.keys())
+    sophos_set = set(sophos_by_norm.keys())
+
+    missing_from_nable = sorted([sophos_by_norm[k] for k in (sophos_set - nable_set)])
+    missing_from_sophos = sorted([nable_by_norm[k] for k in (nable_set - sophos_set)])
+
+    return jsonify(
+        {
+            "customer_id": customer_id,
+            "customer_name": customer["display_name"],
+            "nable_total_names": len(nable_by_norm),
+            "sophos_total_names": len(sophos_by_norm),
+            "matched_names": len(nable_set & sophos_set),
+            "missing_from_nable": missing_from_nable,
+            "missing_from_sophos": missing_from_sophos,
+        }
+    )
 
 
 @app.route("/api/sync/status", methods=["GET"])
@@ -600,6 +864,60 @@ def api_sync_run():
     success, message, details = run_sync("manual")
     code = 200 if success else 500
     return jsonify({"success": success, "message": message, "details": details}), code
+
+
+@app.route("/api/merge-mappings", methods=["GET"])
+def api_merge_mappings():
+    mappings = load_merge_mappings()
+    items = [{"from_key": fk, "to_key": tk} for fk, tk in sorted(mappings.items(), key=lambda x: x[0])]
+    return jsonify({"items": items, "count": len(items)})
+
+
+@app.route("/api/merge-mappings", methods=["POST"])
+def api_create_merge_mapping():
+    payload = request.get_json(silent=True) or {}
+    from_name = str(payload.get("from_name") or "").strip()
+    to_name = str(payload.get("to_name") or "").strip()
+    if not from_name or not to_name:
+        return jsonify({"error": "from_name and to_name are required"}), 400
+
+    from_key = normalize_customer_name(from_name)
+    to_key = normalize_customer_name(to_name)
+    if not from_key or not to_key:
+        return jsonify({"error": "Unable to normalize one or both names"}), 400
+    if from_key == to_key:
+        return jsonify({"error": "Source and target normalize to the same key"}), 400
+
+    existing = load_merge_mappings()
+    if resolve_merge_key(to_key, existing) == from_key:
+        return jsonify({"error": "Mapping would create a loop"}), 400
+
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO merge_mappings (from_key, to_key, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(from_key) DO UPDATE SET
+                to_key = excluded.to_key,
+                created_at = excluded.created_at
+            """,
+            (from_key, to_key, utc_now_iso()),
+        )
+        conn.commit()
+        conn.close()
+
+    success, message, details = run_sync("manual-merge")
+    code = 200 if success else 500
+    return jsonify(
+        {
+            "success": success,
+            "message": message,
+            "details": details,
+            "mapping": {"from_key": from_key, "to_key": to_key},
+        }
+    ), code
 
 
 if __name__ == "__main__":

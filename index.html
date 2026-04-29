@@ -47,6 +47,19 @@
         background: #0b1220;
         color: var(--text);
       }
+      .filters {
+        display: grid;
+        grid-template-columns: 1fr 130px;
+        gap: 8px;
+      }
+      .filter-select {
+        width: 100%;
+        padding: 10px 8px;
+        border-radius: 8px;
+        border: 1px solid #334155;
+        background: #0b1220;
+        color: var(--text);
+      }
 
       .list {
         margin-top: 12px;
@@ -66,11 +79,16 @@
       }
       .row:hover { border-color: #3b82f6; }
       .row.active { border-color: #60a5fa; background: #10203a; }
+      .row.status-match { border-left: 3px solid #16a34a; }
+      .row.status-mismatch { border-left: 3px solid #eab308; }
       .row-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
       .name { font-size: 14px; font-weight: 600; }
       .icons { display: flex; gap: 6px; }
       .mini-icon { width: 15px; height: 15px; opacity: 0.95; }
       .row-counts { margin-top: 6px; color: var(--muted); font-size: 12px; }
+      .row-status { margin-top: 4px; font-size: 12px; }
+      .row-status.match { color: #86efac; }
+      .row-status.mismatch { color: #fde68a; }
 
       .main {
         padding: 24px;
@@ -148,6 +166,70 @@
         color: var(--muted);
         font-size: 12px;
       }
+      .merge-box {
+        margin-top: 16px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+      }
+      .merge-title {
+        margin: 0 0 8px;
+        font-size: 13px;
+        color: #cbd5e1;
+      }
+      .merge-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr auto;
+        gap: 8px;
+      }
+      .merge-select {
+        padding: 8px;
+        border-radius: 8px;
+        border: 1px solid #334155;
+        background: #0b1220;
+        color: var(--text);
+      }
+      .merge-msg {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .compare-box {
+        margin-top: 16px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+      }
+      .compare-summary {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 10px;
+      }
+      .compare-columns {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .compare-col {
+        border: 1px solid #273449;
+        border-radius: 8px;
+        padding: 8px;
+        background: #0b1220;
+      }
+      .compare-col h4 {
+        margin: 0 0 6px;
+        font-size: 13px;
+      }
+      .compare-list {
+        margin: 0;
+        padding-left: 16px;
+        max-height: 180px;
+        overflow: auto;
+        color: #cbd5e1;
+        font-size: 12px;
+      }
     </style>
   </head>
   <body>
@@ -155,7 +237,14 @@
       <aside class="sidebar">
         <h1 class="title">Billing Portal</h1>
         <p class="subtitle">Cached customer device counts</p>
-        <input id="searchInput" class="search" placeholder="Search customers..." />
+        <div class="filters">
+          <input id="searchInput" class="search" placeholder="Search customers..." />
+          <select id="statusFilter" class="filter-select">
+            <option value="all">All</option>
+            <option value="mismatch">Mismatch</option>
+            <option value="match">Match</option>
+          </select>
+        </div>
         <div id="customerList" class="list"></div>
       </aside>
 
@@ -190,6 +279,33 @@
               <div class="card-sub">Managed endpoints discovered in Sophos</div>
             </article>
           </div>
+          <div class="merge-box">
+            <h3 class="merge-title">Manual Customer Merge</h3>
+            <div class="merge-grid">
+              <select id="mergeFrom" class="merge-select"></select>
+              <select id="mergeTo" class="merge-select"></select>
+              <button id="mergeButton" class="button" type="button">Merge</button>
+            </div>
+            <div id="mergeMessage" class="merge-msg">Map one customer name into another when auto-match misses.</div>
+          </div>
+
+          <div class="compare-box">
+            <h3 class="merge-title">Device Name Compare</h3>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+              <button id="compareButton" class="button" type="button">Compare Device Names</button>
+              <span id="compareSummary" class="compare-summary"></span>
+            </div>
+            <div class="compare-columns">
+              <div class="compare-col">
+                <h4>Missing from N-able</h4>
+                <ul id="missingFromNable" class="compare-list"></ul>
+              </div>
+              <div class="compare-col">
+                <h4>Missing from Sophos</h4>
+                <ul id="missingFromSophos" class="compare-list"></ul>
+              </div>
+            </div>
+          </div>
         </div>
       </main>
     </div>
@@ -203,6 +319,7 @@
 
       const customerList = document.getElementById("customerList");
       const searchInput = document.getElementById("searchInput");
+      const statusFilter = document.getElementById("statusFilter");
       const syncText = document.getElementById("syncText");
       const syncPill = document.getElementById("syncPill");
       const refreshButton = document.getElementById("refreshButton");
@@ -211,6 +328,14 @@
       const customerName = document.getElementById("customerName");
       const nableCount = document.getElementById("nableCount");
       const sophosCount = document.getElementById("sophosCount");
+      const mergeFrom = document.getElementById("mergeFrom");
+      const mergeTo = document.getElementById("mergeTo");
+      const mergeButton = document.getElementById("mergeButton");
+      const mergeMessage = document.getElementById("mergeMessage");
+      const compareButton = document.getElementById("compareButton");
+      const compareSummary = document.getElementById("compareSummary");
+      const missingFromNable = document.getElementById("missingFromNable");
+      const missingFromSophos = document.getElementById("missingFromSophos");
 
       function fmtDate(iso) {
         if (!iso) return "never";
@@ -239,26 +364,41 @@
 
         state.filtered.forEach((row) => {
           const el = document.createElement("div");
-          el.className = "row" + (row.id === state.selectedId ? " active" : "");
+          const statusClass = row.count_status === "match" ? "status-match" : "status-mismatch";
+          el.className = "row " + statusClass + (row.id === state.selectedId ? " active" : "");
+          const statusText = row.count_status === "match"
+            ? "Counts match"
+            : `Mismatch (${Math.abs((row.nable_count || 0) - (row.sophos_count || 0))})`;
           el.innerHTML = `
             <div class="row-top">
               <div class="name">${row.display_name}</div>
               <div class="icons">${iconMarkup(row)}</div>
             </div>
             <div class="row-counts">N-able: ${row.nable_count} • Sophos: ${row.sophos_count}</div>
+            <div class="row-status ${row.count_status}">${statusText}</div>
           `;
           el.addEventListener("click", () => selectCustomer(row.id));
           customerList.appendChild(el);
         });
       }
 
+      function renderMergeOptions() {
+        const opts = state.customers
+          .map((c) => `<option value="${String(c.display_name).replace(/"/g, "&quot;")}">${c.display_name}</option>`)
+          .join("");
+        mergeFrom.innerHTML = `<option value="">Merge from...</option>${opts}`;
+        mergeTo.innerHTML = `<option value="">Merge into...</option>${opts}`;
+      }
+
       async function loadCustomers() {
         const q = encodeURIComponent(searchInput.value.trim());
-        const res = await fetch(`/api/customers?search=${q}`);
+        const status = encodeURIComponent(statusFilter.value || "all");
+        const res = await fetch(`/api/customers?search=${q}&status=${status}`);
         const data = await res.json();
         state.customers = data.items || [];
         state.filtered = state.customers;
         renderList();
+        renderMergeOptions();
       }
 
       async function selectCustomer(id) {
@@ -272,6 +412,9 @@
         sophosCount.textContent = String(data.sophos_count || 0);
         emptyState.style.display = "none";
         detailArea.style.display = "block";
+        compareSummary.textContent = "";
+        missingFromNable.innerHTML = "";
+        missingFromSophos.innerHTML = "";
       }
 
       async function loadStatus() {
@@ -298,8 +441,81 @@
         }
       }
 
+      async function createMergeMapping() {
+        const fromName = mergeFrom.value;
+        const toName = mergeTo.value;
+        if (!fromName || !toName) {
+          mergeMessage.textContent = "Select both source and target customers.";
+          return;
+        }
+        if (fromName === toName) {
+          mergeMessage.textContent = "Source and target must be different.";
+          return;
+        }
+
+        mergeButton.disabled = true;
+        mergeButton.textContent = "Merging...";
+        try {
+          const res = await fetch("/api/merge-mappings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ from_name: fromName, to_name: toName }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            mergeMessage.textContent = data.error || "Merge mapping failed.";
+            return;
+          }
+          mergeMessage.textContent = `Merged "${fromName}" into "${toName}".`;
+          await loadStatus();
+          await loadCustomers();
+        } catch (err) {
+          mergeMessage.textContent = `Merge request failed: ${err}`;
+        } finally {
+          mergeButton.disabled = false;
+          mergeButton.textContent = "Merge";
+        }
+      }
+
+      function renderMissingList(targetEl, items) {
+        if (!items.length) {
+          targetEl.innerHTML = "<li>None</li>";
+          return;
+        }
+        targetEl.innerHTML = items.map((x) => `<li>${x}</li>`).join("");
+      }
+
+      async function runDeviceCompare() {
+        if (!state.selectedId) {
+          compareSummary.textContent = "Select a customer first.";
+          return;
+        }
+        compareButton.disabled = true;
+        compareButton.textContent = "Comparing...";
+        compareSummary.textContent = "Loading device comparison...";
+        try {
+          const res = await fetch(`/api/customers/${state.selectedId}/device-compare`);
+          const data = await res.json();
+          if (!res.ok) {
+            compareSummary.textContent = data.error || "Compare failed.";
+            return;
+          }
+          compareSummary.textContent = `Matched: ${data.matched_names} | N-able names: ${data.nable_total_names} | Sophos names: ${data.sophos_total_names}`;
+          renderMissingList(missingFromNable, data.missing_from_nable || []);
+          renderMissingList(missingFromSophos, data.missing_from_sophos || []);
+        } catch (err) {
+          compareSummary.textContent = `Compare request failed: ${err}`;
+        } finally {
+          compareButton.disabled = false;
+          compareButton.textContent = "Compare Device Names";
+        }
+      }
+
       searchInput.addEventListener("input", loadCustomers);
+      statusFilter.addEventListener("change", loadCustomers);
       refreshButton.addEventListener("click", runSync);
+      mergeButton.addEventListener("click", createMergeMapping);
+      compareButton.addEventListener("click", runDeviceCompare);
 
       (async () => {
         await loadStatus();
