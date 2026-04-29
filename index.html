@@ -337,9 +337,16 @@
           const el = document.createElement("div");
           const statusClass = row.count_status === "match" ? "status-match" : "status-mismatch";
           el.className = "row " + statusClass + (row.id === state.selectedId ? " active" : "");
-          const statusText = row.count_status === "match"
-            ? "Counts match"
-            : `Mismatch (${Math.abs((row.nable_count || 0) - (row.sophos_count || 0))})`;
+          let statusText = "";
+          if (Number(row.has_nable) === 0 && Number(row.has_sophos) > 0) {
+            statusText = "Doesn't have N-able";
+          } else if (Number(row.has_sophos) === 0 && Number(row.has_nable) > 0) {
+            statusText = "Doesn't have Sophos";
+          } else if (row.count_status === "mismatch") {
+            statusText = `Mismatch (${Math.abs((row.nable_count || 0) - (row.sophos_count || 0))})`;
+          } else {
+            statusText = "Counts match";
+          }
           el.innerHTML = `
             <div class="row-top">
               <div class="name">${row.display_name}</div>

@@ -1079,8 +1079,8 @@ def api_customers():
                 l.has_sophos,
                 l.last_synced_at,
                 CASE
-                    WHEN l.nable_count = l.sophos_count THEN 'match'
-                    ELSE 'mismatch'
+                    WHEN l.has_nable = 1 AND l.has_sophos = 1 AND l.nable_count <> l.sophos_count THEN 'mismatch'
+                    ELSE 'match'
                 END AS count_status,
                 ABS(l.nable_count - l.sophos_count) AS count_delta,
                 ROUND((l.nable_count + l.sophos_count) / 2.0, 1) AS average_total
@@ -1123,8 +1123,8 @@ def api_customer(customer_id: int):
                 l.has_sophos,
                 l.last_synced_at,
                 CASE
-                    WHEN l.nable_count = l.sophos_count THEN 'match'
-                    ELSE 'mismatch'
+                    WHEN l.has_nable = 1 AND l.has_sophos = 1 AND l.nable_count <> l.sophos_count THEN 'mismatch'
+                    ELSE 'match'
                 END AS count_status,
                 ABS(l.nable_count - l.sophos_count) AS count_delta,
                 ROUND((l.nable_count + l.sophos_count) / 2.0, 1) AS average_total
