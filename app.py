@@ -187,6 +187,84 @@ def apply_platform_links(nable_counts: Dict[str, Dict], sophos_counts: Dict[str,
     return nable_result, sophos_result
 
 
+def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key: str, canonical_name: str) -> Dict[str, int]:
+    summary = {"rows_collapsed": 0}
+    joined_key = f"link:{link_id}"
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT c.id, c.normalized_key, l.nable_count, l.sophos_count
+            FROM customers c
+            LEFT JOIN customer_counts_latest l ON l.customer_id = c.id
+            WHERE c.normalized_key IN (?, ?, ?)
+            """,
+            (nable_key, sophos_key, joined_key),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        total_nable = sum(int((r.get("nable_count") or 0)) for r in rows)
+        total_sophos = sum(int((r.get("sophos_count") or 0)) for r in rows)
+        synced_at = utc_now_iso()
+
+        cur.execute(
+            """
+            INSERT INTO customers (display_name, normalized_key, nable_source_name, sophos_source_name)
+            VALUES (?, ?, NULL, NULL)
+            ON CONFLICT(normalized_key) DO UPDATE SET
+                display_name = excluded.display_name
+            """,
+            (canonical_name, joined_key),
+        )
+        cur.execute("SELECT id FROM customers WHERE normalized_key = ?", (joined_key,))
+        joined_customer_id = cur.fetchone()[0]
+
+        cur.execute(
+            """
+            INSERT INTO customer_counts_latest
+                (customer_id, nable_count, sophos_count, has_nable, has_sophos, last_synced_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(customer_id) DO UPDATE SET
+                nable_count=excluded.nable_count,
+                sophos_count=excluded.sophos_count,
+                has_nable=excluded.has_nable,
+                has_sophos=excluded.has_sophos,
+                last_synced_at=excluded.last_synced_at
+            """,
+            (
+                joined_customer_id,
+                total_nable,
+                total_sophos,
+                1 if total_nable > 0 else 0,
+                1 if total_sophos > 0 else 0,
+                synced_at,
+            ),
+        )
+
+        cur.execute(
+            """
+            INSERT INTO customer_count_history (customer_id, nable_count, sophos_count, captured_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (joined_customer_id, total_nable, total_sophos, synced_at),
+        )
+
+        # Remove source rows so UI immediately shows single canonical entry.
+        cur.execute("SELECT id FROM customers WHERE normalized_key IN (?, ?)", (nable_key, sophos_key))
+        source_ids = [r[0] for r in cur.fetchall()]
+        for sid in source_ids:
+            if sid == joined_customer_id:
+                continue
+            cur.execute("DELETE FROM customer_counts_latest WHERE customer_id = ?", (sid,))
+            cur.execute("DELETE FROM customers WHERE id = ?", (sid,))
+            summary["rows_collapsed"] += 1
+
+        conn.commit()
+        conn.close()
+    return summary
+
+
 def ensure_db_dir() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
@@ -1003,6 +1081,11 @@ def api_customers():
                 ROUND((l.nable_count + l.sophos_count) / 2.0, 1) AS average_total
             FROM customers c
             INNER JOIN customer_counts_latest l ON l.customer_id = c.id
+            WHERE c.normalized_key NOT IN (
+                SELECT nable_key FROM platform_links
+                UNION
+                SELECT sophos_key FROM platform_links
+            )
             ORDER BY c.display_name COLLATE NOCASE ASC
             """
         )
@@ -1043,6 +1126,11 @@ def api_customer(customer_id: int):
             FROM customers c
             INNER JOIN customer_counts_latest l ON l.customer_id = c.id
             WHERE c.id = ?
+              AND c.normalized_key NOT IN (
+                  SELECT nable_key FROM platform_links
+                  UNION
+                  SELECT sophos_key FROM platform_links
+              )
             """,
             (customer_id,),
         )
@@ -1223,22 +1311,29 @@ def api_create_platform_link():
     with db_lock:
         conn = get_conn()
         cur = conn.cursor()
+        cur.execute("DELETE FROM platform_links WHERE nable_key = ? OR sophos_key = ?", (nable_key, sophos_key))
         cur.execute(
             """
             INSERT INTO platform_links (nable_key, sophos_key, canonical_name, created_at)
             VALUES (?, ?, ?, ?)
-            ON CONFLICT(nable_key) DO UPDATE SET
-                sophos_key=excluded.sophos_key,
-                canonical_name=excluded.canonical_name,
-                created_at=excluded.created_at
             """,
             (nable_key, sophos_key, canonical_name, utc_now_iso()),
         )
+        cur.execute("SELECT id FROM platform_links WHERE nable_key = ?", (nable_key,))
+        link_id = cur.fetchone()[0]
         conn.commit()
         conn.close()
 
+    collapse_summary = apply_platform_link_to_cached_data(link_id, nable_key, sophos_key, canonical_name)
     trigger_sync_async("platform-link")
-    return jsonify({"success": True, "message": "Platform link saved and sync started"}), 202
+    return jsonify(
+        {
+            "success": True,
+            "message": "Platform link saved, rows collapsed, and sync started",
+            "link_id": link_id,
+            "collapse_summary": collapse_summary,
+        }
+    ), 202
 
 
 @app.route("/api/merge-mappings", methods=["POST"])
