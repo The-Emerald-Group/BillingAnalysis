@@ -1,0 +1,24 @@
+services:
+  billing-portal:
+    build: .
+    container_name: billing-portal
+    environment:
+      - PORT=8083
+      - SYNC_INTERVAL_MINUTES=180
+      - NABLE_TOKEN=your_nable_jwt_here
+      - NABLE_API_BASE=https://api.n-able.com
+      - NABLE_DEVICES_PATH=/devices
+      - SOPHOS_CLIENT_ID=your_sophos_client_id_here
+      - SOPHOS_CLIENT_SECRET=your_sophos_client_secret_here
+      - REQUEST_TIMEOUT_SECONDS=30
+      - MAX_RETRIES=3
+      - RETRY_DELAY_SECONDS=1.5
+      - DB_PATH=/data/billing_cache.db
+    ports:
+      - "8083:8083"
+    volumes:
+      - billing_portal_data:/data
+    restart: unless-stopped
+
+volumes:
+  billing_portal_data:

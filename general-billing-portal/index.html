@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>General Billing Portal</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #111827;
+        --muted: #94a3b8;
+        --line: #1f2937;
+        --text: #e5e7eb;
+        --accent: #3b82f6;
+        --good: #16a34a;
+        --warn: #ea580c;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Segoe UI, Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .app {
+        display: grid;
+        grid-template-columns: 360px 1fr;
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        border-right: 1px solid var(--line);
+        background: var(--panel);
+        padding: 16px;
+      }
+
+      .title { margin: 0; font-size: 20px; }
+      .subtitle { margin: 6px 0 14px; color: var(--muted); font-size: 13px; }
+
+      .search {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #334155;
+        background: #0b1220;
+        color: var(--text);
+      }
+
+      .list {
+        margin-top: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: calc(100vh - 150px);
+        overflow: auto;
+      }
+
+      .row {
+        border: 1px solid #243042;
+        background: #0b1220;
+        padding: 10px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .row:hover { border-color: #3b82f6; }
+      .row.active { border-color: #60a5fa; background: #10203a; }
+      .row-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+      .name { font-size: 14px; font-weight: 600; }
+      .icons { display: flex; gap: 6px; }
+      .mini-icon { width: 15px; height: 15px; opacity: 0.95; }
+      .row-counts { margin-top: 6px; color: var(--muted); font-size: 12px; }
+
+      .main {
+        padding: 24px;
+      }
+      .status {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 10px;
+        padding: 12px 14px;
+      }
+      .status-left { font-size: 13px; color: var(--muted); }
+      .status-right { display: flex; gap: 10px; align-items: center; }
+      .pill {
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 4px 9px;
+        border: 1px solid #334155;
+      }
+      .pill.ok { color: #86efac; border-color: #166534; background: #052e16; }
+      .pill.error { color: #fdba74; border-color: #9a3412; background: #431407; }
+      .button {
+        border: 1px solid #2563eb;
+        background: #1d4ed8;
+        color: white;
+        padding: 8px 11px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+
+      .empty {
+        margin-top: 24px;
+        color: var(--muted);
+        border: 1px dashed #334155;
+        border-radius: 10px;
+        padding: 18px;
+      }
+
+      .customer-name {
+        margin: 20px 0 10px;
+        font-size: 22px;
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+        gap: 16px;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 16px;
+      }
+
+      .card-top {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #cbd5e1;
+        font-size: 14px;
+      }
+      .logo { width: 24px; height: 24px; }
+      .count {
+        margin-top: 10px;
+        font-size: 34px;
+        font-weight: 700;
+        line-height: 1;
+      }
+      .card-sub {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <h1 class="title">Billing Portal</h1>
+        <p class="subtitle">Cached customer device counts</p>
+        <input id="searchInput" class="search" placeholder="Search customers..." />
+        <div id="customerList" class="list"></div>
+      </aside>
+
+      <main class="main">
+        <div class="status">
+          <div id="syncText" class="status-left">Loading sync status...</div>
+          <div class="status-right">
+            <span id="syncPill" class="pill">unknown</span>
+            <button id="refreshButton" class="button" type="button">Run Sync</button>
+          </div>
+        </div>
+
+        <div id="emptyState" class="empty">Pick a customer on the left to view N-able and Sophos counts.</div>
+        <div id="detailArea" style="display: none;">
+          <h2 id="customerName" class="customer-name"></h2>
+          <div class="cards">
+            <article class="card">
+              <div class="card-top">
+                <img src="/assets/nable.svg" class="logo" alt="N-able logo" />
+                <span>N-able Devices</span>
+              </div>
+              <div id="nableCount" class="count">0</div>
+              <div class="card-sub">Managed devices discovered in N-able</div>
+            </article>
+
+            <article class="card">
+              <div class="card-top">
+                <img src="/assets/sophos.svg" class="logo" alt="Sophos logo" />
+                <span>Sophos Devices</span>
+              </div>
+              <div id="sophosCount" class="count">0</div>
+              <div class="card-sub">Managed endpoints discovered in Sophos</div>
+            </article>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      const state = {
+        customers: [],
+        filtered: [],
+        selectedId: null,
+      };
+
+      const customerList = document.getElementById("customerList");
+      const searchInput = document.getElementById("searchInput");
+      const syncText = document.getElementById("syncText");
+      const syncPill = document.getElementById("syncPill");
+      const refreshButton = document.getElementById("refreshButton");
+      const emptyState = document.getElementById("emptyState");
+      const detailArea = document.getElementById("detailArea");
+      const customerName = document.getElementById("customerName");
+      const nableCount = document.getElementById("nableCount");
+      const sophosCount = document.getElementById("sophosCount");
+
+      function fmtDate(iso) {
+        if (!iso) return "never";
+        const date = new Date(iso);
+        if (Number.isNaN(date.getTime())) return iso;
+        return date.toLocaleString();
+      }
+
+      function iconMarkup(row) {
+        const icons = [];
+        if (row.has_nable) {
+          icons.push('<img class="mini-icon" src="/assets/nable.svg" alt="N-able" title="N-able" />');
+        }
+        if (row.has_sophos) {
+          icons.push('<img class="mini-icon" src="/assets/sophos.svg" alt="Sophos" title="Sophos" />');
+        }
+        return icons.join("");
+      }
+
+      function renderList() {
+        customerList.innerHTML = "";
+        if (!state.filtered.length) {
+          customerList.innerHTML = '<div class="row"><div class="name">No customers found</div></div>';
+          return;
+        }
+
+        state.filtered.forEach((row) => {
+          const el = document.createElement("div");
+          el.className = "row" + (row.id === state.selectedId ? " active" : "");
+          el.innerHTML = `
+            <div class="row-top">
+              <div class="name">${row.display_name}</div>
+              <div class="icons">${iconMarkup(row)}</div>
+            </div>
+            <div class="row-counts">N-able: ${row.nable_count} • Sophos: ${row.sophos_count}</div>
+          `;
+          el.addEventListener("click", () => selectCustomer(row.id));
+          customerList.appendChild(el);
+        });
+      }
+
+      async function loadCustomers() {
+        const q = encodeURIComponent(searchInput.value.trim());
+        const res = await fetch(`/api/customers?search=${q}`);
+        const data = await res.json();
+        state.customers = data.items || [];
+        state.filtered = state.customers;
+        renderList();
+      }
+
+      async function selectCustomer(id) {
+        state.selectedId = id;
+        renderList();
+        const res = await fetch(`/api/customers/${id}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        customerName.textContent = data.display_name;
+        nableCount.textContent = String(data.nable_count || 0);
+        sophosCount.textContent = String(data.sophos_count || 0);
+        emptyState.style.display = "none";
+        detailArea.style.display = "block";
+      }
+
+      async function loadStatus() {
+        const res = await fetch("/api/sync/status");
+        const data = await res.json();
+        const rt = data.runtime || {};
+        const last = (data.latest_run || {}).finished_at || rt.last_sync_finished_at;
+        const stateText = rt.last_sync_status || "unknown";
+        syncText.textContent = `Last sync: ${fmtDate(last)} | Interval: ${data.interval_minutes} min`;
+        syncPill.textContent = stateText;
+        syncPill.className = "pill " + (stateText === "ok" ? "ok" : stateText === "error" ? "error" : "");
+      }
+
+      async function runSync() {
+        refreshButton.disabled = true;
+        refreshButton.textContent = "Syncing...";
+        try {
+          await fetch("/api/sync/run", { method: "POST" });
+        } finally {
+          refreshButton.disabled = false;
+          refreshButton.textContent = "Run Sync";
+          await loadStatus();
+          await loadCustomers();
+        }
+      }
+
+      searchInput.addEventListener("input", loadCustomers);
+      refreshButton.addEventListener("click", runSync);
+
+      (async () => {
+        await loadStatus();
+        await loadCustomers();
+      })();
+    </script>
+  </body>
+</html>

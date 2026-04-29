@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Sophos">
+  <rect width="64" height="64" rx="12" fill="#DC2626"/>
+  <path d="M32 15c8.9 0 16.2 7.3 16.2 16.2S40.9 47.4 32 47.4s-16.2-7.3-16.2-16.2S23.1 15 32 15zm0 6.3c-5.4 0-9.9 4.5-9.9 9.9s4.5 9.9 9.9 9.9 9.9-4.5 9.9-9.9-4.5-9.9-9.9-9.9z" fill="#fff"/>
+</svg>
