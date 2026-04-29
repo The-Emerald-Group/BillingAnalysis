@@ -48,8 +48,13 @@
         color: var(--text);
       }
       .filters {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .filter-row {
         display: grid;
-        grid-template-columns: 1fr 130px 180px;
+        grid-template-columns: 1fr 1fr;
         gap: 8px;
       }
       .filter-select {
@@ -270,21 +275,23 @@
         <p class="subtitle">Cached customer device counts</p>
         <div class="filters">
           <input id="searchInput" class="search" placeholder="Search customers..." />
-          <select id="statusFilter" class="filter-select">
-            <option value="all">All</option>
-            <option value="mismatch">Mismatch</option>
-            <option value="match">Match</option>
-          </select>
-          <select id="sortFilter" class="filter-select">
-            <option value="name_asc">Name A-Z</option>
-            <option value="name_desc">Name Z-A</option>
-            <option value="mismatch_desc">Mismatch High-Low</option>
-            <option value="mismatch_asc">Mismatch Low-High</option>
-            <option value="total_desc">Total Devices High-Low</option>
-            <option value="total_asc">Total Devices Low-High</option>
-            <option value="avg_desc">Average High-Low</option>
-            <option value="avg_asc">Average Low-High</option>
-          </select>
+          <div class="filter-row">
+            <select id="statusFilter" class="filter-select">
+              <option value="all">All</option>
+              <option value="mismatch">Mismatch</option>
+              <option value="match">Match</option>
+            </select>
+            <select id="sortFilter" class="filter-select">
+              <option value="name_asc">Name A-Z</option>
+              <option value="name_desc">Name Z-A</option>
+              <option value="mismatch_desc">Mismatch High-Low</option>
+              <option value="mismatch_asc">Mismatch Low-High</option>
+              <option value="total_desc">Total Devices High-Low</option>
+              <option value="total_asc">Total Devices Low-High</option>
+              <option value="avg_desc">Average High-Low</option>
+              <option value="avg_asc">Average Low-High</option>
+            </select>
+          </div>
         </div>
         <div class="summary-counters">
           <span id="allSummaryChip" class="counter-chip">All: Match 0 • Mismatch 0</span>
