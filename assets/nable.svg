@@ -1,4 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="N-able">
-  <rect width="64" height="64" rx="12" fill="#0F766E"/>
-  <path d="M17 45V19h7l16 17V19h7v26h-7L24 28v17h-7z" fill="#fff"/>
+<svg version="1.2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1549 1136" width="1549" height="1136">
+	<title>NABL</title>
+	<style>
+		.s0 { fill: #000000 } 
+		.s1 { fill: #c046ff } 
+	</style>
+	<path fill-rule="evenodd" class="s0" d="m1144.2 0v401.8h-404.6v-401.8z"/>
+	<path class="s0" d="m0.4 1136h404.6v-401.8l404.6 401.8h334.6v-332.3l-809.1-803.7h-334.7z"/>
+	<path class="s1" d="m1144.2 803.7l-404.6-401.9h809.2v401.9z"/>
 </svg>
