@@ -1063,6 +1063,7 @@ def assets(filename):
 def api_customers():
     search = (request.args.get("search") or "").strip().lower()
     status_filter = (request.args.get("status") or "all").strip().lower()
+    sort_by = (request.args.get("sort") or "name_asc").strip().lower()
     with db_lock:
         conn = get_conn()
         cur = conn.cursor()
@@ -1094,15 +1095,51 @@ def api_customers():
             ORDER BY c.display_name COLLATE NOCASE ASC
             """
         )
-        rows = [dict(row) for row in cur.fetchall()]
+        rows_all = [dict(row) for row in cur.fetchall()]
         conn.close()
 
+    if search:
+        rows_all = [r for r in rows_all if search in (r["display_name"] or "").lower()]
+
+    matched_all = len([r for r in rows_all if r.get("count_status") == "match"])
+    mismatched_all = len([r for r in rows_all if r.get("count_status") == "mismatch"])
+
+    rows = list(rows_all)
     if search:
         rows = [r for r in rows if search in (r["display_name"] or "").lower()]
     if status_filter in {"match", "mismatch"}:
         rows = [r for r in rows if r.get("count_status") == status_filter]
 
-    return jsonify({"items": rows, "count": len(rows)})
+    if sort_by == "name_desc":
+        rows.sort(key=lambda r: (r.get("display_name") or "").lower(), reverse=True)
+    elif sort_by == "mismatch_desc":
+        rows.sort(key=lambda r: (int(r.get("count_delta") or 0), (r.get("display_name") or "").lower()), reverse=True)
+    elif sort_by == "mismatch_asc":
+        rows.sort(key=lambda r: (int(r.get("count_delta") or 0), (r.get("display_name") or "").lower()))
+    elif sort_by == "total_desc":
+        rows.sort(key=lambda r: (int(r.get("nable_count") or 0) + int(r.get("sophos_count") or 0), (r.get("display_name") or "").lower()), reverse=True)
+    elif sort_by == "total_asc":
+        rows.sort(key=lambda r: (int(r.get("nable_count") or 0) + int(r.get("sophos_count") or 0), (r.get("display_name") or "").lower()))
+    elif sort_by == "avg_desc":
+        rows.sort(key=lambda r: (float(r.get("average_total") or 0), (r.get("display_name") or "").lower()), reverse=True)
+    elif sort_by == "avg_asc":
+        rows.sort(key=lambda r: (float(r.get("average_total") or 0), (r.get("display_name") or "").lower()))
+    else:
+        rows.sort(key=lambda r: (r.get("display_name") or "").lower())
+
+    matched_visible = len([r for r in rows if r.get("count_status") == "match"])
+    mismatched_visible = len([r for r in rows if r.get("count_status") == "mismatch"])
+
+    return jsonify(
+        {
+            "items": rows,
+            "count": len(rows),
+            "summary": {
+                "all": {"matched": matched_all, "mismatched": mismatched_all, "total": len(rows_all)},
+                "visible": {"matched": matched_visible, "mismatched": mismatched_visible, "total": len(rows)},
+            },
+        }
+    )
 
 
 @app.route("/api/customers/<int:customer_id>", methods=["GET"])
@@ -1216,6 +1253,40 @@ def api_customer_device_compare(customer_id: int):
 
     missing_from_nable = sorted([sophos_by_norm[k] for k in (sophos_set - nable_set)])
     missing_from_sophos = sorted([nable_by_norm[k] for k in (nable_set - sophos_set)])
+    all_keys = sorted(nable_set | sophos_set)
+    comparison_rows = []
+    for key in all_keys:
+        n_name = nable_by_norm.get(key)
+        s_name = sophos_by_norm.get(key)
+        if n_name and s_name:
+            status = "match"
+            label = "Match"
+            sort_rank = 1
+            display = n_name
+        elif n_name and not s_name:
+            status = "missing_from_sophos"
+            label = "Missing from Sophos"
+            sort_rank = 0
+            display = n_name
+        else:
+            status = "missing_from_nable"
+            label = "Missing from N-able"
+            sort_rank = 0
+            display = s_name
+
+        comparison_rows.append(
+            {
+                "status": status,
+                "label": label,
+                "device_key": key,
+                "display_name": display,
+                "nable_name": n_name,
+                "sophos_name": s_name,
+                "sort_rank": sort_rank,
+            }
+        )
+
+    comparison_rows.sort(key=lambda r: (r["sort_rank"], (r["display_name"] or "").lower()))
 
     return jsonify(
         {
@@ -1227,6 +1298,7 @@ def api_customer_device_compare(customer_id: int):
             "missing_from_nable": missing_from_nable,
             "missing_from_sophos": missing_from_sophos,
             "warnings": warnings,
+            "comparison_rows": comparison_rows,
         }
     )
 

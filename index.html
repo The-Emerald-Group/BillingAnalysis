@@ -49,7 +49,7 @@
       }
       .filters {
         display: grid;
-        grid-template-columns: 1fr 130px;
+        grid-template-columns: 1fr 130px 180px;
         gap: 8px;
       }
       .filter-select {
@@ -59,6 +59,20 @@
         border: 1px solid #334155;
         background: #0b1220;
         color: var(--text);
+      }
+      .summary-counters {
+        margin-top: 8px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .counter-chip {
+        border: 1px solid #334155;
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12px;
+        color: #cbd5e1;
+        background: #0b1220;
       }
 
       .list {
@@ -190,9 +204,7 @@
         white-space: pre-wrap;
       }
       .compare-columns {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 10px;
+        display: block;
       }
       .compare-col {
         border: 1px solid #273449;
@@ -212,6 +224,43 @@
         color: #cbd5e1;
         font-size: 12px;
       }
+      .compare-table-wrap {
+        max-height: 320px;
+        overflow: auto;
+        border: 1px solid #273449;
+        border-radius: 8px;
+      }
+      .compare-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      .compare-table th,
+      .compare-table td {
+        padding: 8px;
+        border-bottom: 1px solid #1f2937;
+        text-align: left;
+      }
+      .compare-row-match {
+        background: rgba(22, 163, 74, 0.14);
+      }
+      .compare-row-mismatch {
+        background: rgba(220, 38, 38, 0.14);
+      }
+      .status-chip {
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 11px;
+        border: 1px solid transparent;
+      }
+      .status-chip.match {
+        color: #86efac;
+        border-color: #166534;
+      }
+      .status-chip.mismatch {
+        color: #fecaca;
+        border-color: #7f1d1d;
+      }
     </style>
   </head>
   <body>
@@ -226,6 +275,20 @@
             <option value="mismatch">Mismatch</option>
             <option value="match">Match</option>
           </select>
+          <select id="sortFilter" class="filter-select">
+            <option value="name_asc">Name A-Z</option>
+            <option value="name_desc">Name Z-A</option>
+            <option value="mismatch_desc">Mismatch High-Low</option>
+            <option value="mismatch_asc">Mismatch Low-High</option>
+            <option value="total_desc">Total Devices High-Low</option>
+            <option value="total_asc">Total Devices Low-High</option>
+            <option value="avg_desc">Average High-Low</option>
+            <option value="avg_asc">Average Low-High</option>
+          </select>
+        </div>
+        <div class="summary-counters">
+          <span id="allSummaryChip" class="counter-chip">All: Match 0 • Mismatch 0</span>
+          <span id="visibleSummaryChip" class="counter-chip">Visible: Match 0 • Mismatch 0</span>
         </div>
         <div id="customerList" class="list"></div>
       </aside>
@@ -271,12 +334,20 @@
             <div id="compareWarnings" class="compare-warn"></div>
             <div class="compare-columns">
               <div class="compare-col">
-                <h4>Missing from N-able</h4>
-                <ul id="missingFromNable" class="compare-list"></ul>
-              </div>
-              <div class="compare-col">
-                <h4>Missing from Sophos</h4>
-                <ul id="missingFromSophos" class="compare-list"></ul>
+                <h4>Device Comparison (Mismatches first)</h4>
+                <div class="compare-table-wrap">
+                  <table class="compare-table">
+                    <thead>
+                      <tr>
+                        <th>Status</th>
+                        <th>Preferred Name</th>
+                        <th>N-able</th>
+                        <th>Sophos</th>
+                      </tr>
+                    </thead>
+                    <tbody id="compareRowsBody"></tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
@@ -294,6 +365,9 @@
       const customerList = document.getElementById("customerList");
       const searchInput = document.getElementById("searchInput");
       const statusFilter = document.getElementById("statusFilter");
+      const sortFilter = document.getElementById("sortFilter");
+      const allSummaryChip = document.getElementById("allSummaryChip");
+      const visibleSummaryChip = document.getElementById("visibleSummaryChip");
       const syncText = document.getElementById("syncText");
       const syncPill = document.getElementById("syncPill");
       const refreshButton = document.getElementById("refreshButton");
@@ -305,8 +379,7 @@
       const compareButton = document.getElementById("compareButton");
       const compareSummary = document.getElementById("compareSummary");
       const compareWarnings = document.getElementById("compareWarnings");
-      const missingFromNable = document.getElementById("missingFromNable");
-      const missingFromSophos = document.getElementById("missingFromSophos");
+      const compareRowsBody = document.getElementById("compareRowsBody");
 
       function fmtDate(iso) {
         if (!iso) return "never";
@@ -364,10 +437,16 @@
       async function loadCustomers() {
         const q = encodeURIComponent(searchInput.value.trim());
         const status = encodeURIComponent(statusFilter.value || "all");
-        const res = await fetch(`/api/customers?search=${q}&status=${status}`);
+        const sort = encodeURIComponent(sortFilter.value || "name_asc");
+        const res = await fetch(`/api/customers?search=${q}&status=${status}&sort=${sort}`);
         const data = await res.json();
         state.customers = data.items || [];
         state.filtered = state.customers;
+        const summary = data.summary || {};
+        const all = summary.all || {};
+        const visible = summary.visible || {};
+        allSummaryChip.textContent = `All: Match ${all.matched || 0} • Mismatch ${all.mismatched || 0} • Total ${all.total || 0}`;
+        visibleSummaryChip.textContent = `Visible: Match ${visible.matched || 0} • Mismatch ${visible.mismatched || 0} • Total ${visible.total || 0}`;
         renderList();
       }
 
@@ -384,8 +463,7 @@
         detailArea.style.display = "block";
         compareSummary.textContent = "";
         compareWarnings.textContent = "";
-        missingFromNable.innerHTML = "";
-        missingFromSophos.innerHTML = "";
+        compareRowsBody.innerHTML = "";
       }
 
       async function loadStatus() {
@@ -418,12 +496,24 @@
       }
 
 
-      function renderMissingList(targetEl, items) {
-        if (!items.length) {
-          targetEl.innerHTML = "<li>None</li>";
+      function renderComparisonRows(rows) {
+        if (!rows || !rows.length) {
+          compareRowsBody.innerHTML = `<tr><td colspan="4">No device names found.</td></tr>`;
           return;
         }
-        targetEl.innerHTML = items.map((x) => `<li>${x}</li>`).join("");
+        compareRowsBody.innerHTML = rows.map((r) => {
+          const mismatch = r.status !== "match";
+          const rowClass = mismatch ? "compare-row-mismatch" : "compare-row-match";
+          const chipClass = mismatch ? "status-chip mismatch" : "status-chip match";
+          return `
+            <tr class="${rowClass}">
+              <td><span class="${chipClass}">${r.label}</span></td>
+              <td>${r.display_name || ""}</td>
+              <td>${r.nable_name || "—"}</td>
+              <td>${r.sophos_name || "—"}</td>
+            </tr>
+          `;
+        }).join("");
       }
 
       async function runDeviceCompare() {
@@ -443,8 +533,7 @@
           }
           compareSummary.textContent = `Matched: ${data.matched_names} | N-able names: ${data.nable_total_names} | Sophos names: ${data.sophos_total_names}`;
           compareWarnings.textContent = (data.warnings || []).join("\n");
-          renderMissingList(missingFromNable, data.missing_from_nable || []);
-          renderMissingList(missingFromSophos, data.missing_from_sophos || []);
+          renderComparisonRows(data.comparison_rows || []);
         } catch (err) {
           compareSummary.textContent = `Compare request failed: ${err}`;
         } finally {
@@ -455,6 +544,7 @@
 
       searchInput.addEventListener("input", loadCustomers);
       statusFilter.addEventListener("change", loadCustomers);
+      sortFilter.addEventListener("change", loadCustomers);
       refreshButton.addEventListener("click", runSync);
       compareButton.addEventListener("click", runDeviceCompare);
 
