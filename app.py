@@ -132,6 +132,60 @@ def resolve_merge_key(key: str, mappings: Dict[str, str]) -> str:
     return current
 
 
+def load_platform_links() -> List[Dict]:
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT id, nable_key, sophos_key, canonical_name FROM platform_links ORDER BY id ASC")
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+    return rows
+
+
+def apply_platform_links(nable_counts: Dict[str, Dict], sophos_counts: Dict[str, Dict]) -> Tuple[Dict[str, Dict], Dict[str, Dict]]:
+    links = load_platform_links()
+    if not links:
+        return nable_counts, sophos_counts
+
+    nable_result = dict(nable_counts)
+    sophos_result = dict(sophos_counts)
+    consumed_nable = set()
+    consumed_sophos = set()
+
+    for link in links:
+        nkey = str(link["nable_key"])
+        skey = str(link["sophos_key"])
+        nentry = nable_counts.get(nkey)
+        sentry = sophos_counts.get(skey)
+        if not nentry and not sentry:
+            continue
+
+        joined_key = f"link:{link['id']}"
+        canonical_name = (link.get("canonical_name") or "").strip() or (nentry or sentry).get("display_name", joined_key)
+
+        if nentry:
+            nable_result[joined_key] = {
+                "display_name": canonical_name,
+                "count": int(nentry.get("count") or 0),
+                "source_name": nentry.get("source_name") or nentry.get("display_name"),
+            }
+            consumed_nable.add(nkey)
+        if sentry:
+            sophos_result[joined_key] = {
+                "display_name": canonical_name,
+                "count": int(sentry.get("count") or 0),
+                "source_name": sentry.get("source_name") or sentry.get("display_name"),
+            }
+            consumed_sophos.add(skey)
+
+    for key in consumed_nable:
+        nable_result.pop(key, None)
+    for key in consumed_sophos:
+        sophos_result.pop(key, None)
+
+    return nable_result, sophos_result
+
+
 def ensure_db_dir() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
@@ -187,6 +241,14 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS merge_mappings (
                 from_key TEXT PRIMARY KEY,
                 to_key TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS platform_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nable_key TEXT NOT NULL UNIQUE,
+                sophos_key TEXT NOT NULL UNIQUE,
+                canonical_name TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
             """
@@ -313,7 +375,7 @@ def fetch_nable_counts() -> Dict[str, Dict]:
         if not normalized:
             continue
         if normalized not in counts:
-            counts[normalized] = {"display_name": raw_name, "count": 0}
+            counts[normalized] = {"display_name": raw_name, "count": 0, "source_name": raw_name}
         counts[normalized]["count"] += 1
         if len(raw_name) > len(counts[normalized]["display_name"]):
             counts[normalized]["display_name"] = raw_name
@@ -428,7 +490,7 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
             continue
 
         if normalized not in counts:
-            counts[normalized] = {"display_name": tenant_name, "count": 0}
+            counts[normalized] = {"display_name": tenant_name, "count": 0, "source_name": tenant_name}
         counts[normalized]["count"] += count
         if len(tenant_name) > len(counts[normalized]["display_name"]):
             counts[normalized]["display_name"] = tenant_name
@@ -553,8 +615,8 @@ def upsert_counts(
             else:
                 display_name = key
 
-            nable_source_name = nable_entry["display_name"] if nable_entry else None
-            sophos_source_name = sophos_entry["display_name"] if sophos_entry else None
+            nable_source_name = (nable_entry.get("source_name") or nable_entry.get("display_name")) if nable_entry else None
+            sophos_source_name = (sophos_entry.get("source_name") or sophos_entry.get("display_name")) if sophos_entry else None
             nable_count = int(nable_entry["count"]) if nable_entry else 0
             sophos_count = int(sophos_entry["count"]) if sophos_entry else 0
             has_nable = 1 if nable_count > 0 else 0
@@ -799,6 +861,7 @@ def reset_merge_state_and_cached_data() -> None:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("DELETE FROM merge_mappings")
+        cur.execute("DELETE FROM platform_links")
         cur.execute("DELETE FROM customer_counts_latest")
         cur.execute("DELETE FROM customers")
         cur.execute("DELETE FROM customer_count_history")
@@ -834,6 +897,8 @@ def run_sync(trigger: str = "scheduled") -> Tuple[bool, str, Dict]:
         except Exception as exc:
             provider_errors["sophos"] = str(exc)
             logger.exception("Sophos sync failed: %s", exc)
+
+        nable_counts, sophos_counts = apply_platform_links(nable_counts, sophos_counts)
 
         if not nable_counts and not sophos_counts:
             combined = "Both provider syncs failed."
@@ -1102,6 +1167,76 @@ def api_merge_mappings():
     mappings = load_merge_mappings()
     items = [{"from_key": fk, "to_key": tk} for fk, tk in sorted(mappings.items(), key=lambda x: x[0])]
     return jsonify({"items": items, "count": len(items)})
+
+
+@app.route("/api/platform-options", methods=["GET"])
+def api_platform_options():
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT nable_source_name
+            FROM customers
+            WHERE nable_source_name IS NOT NULL AND TRIM(nable_source_name) <> ''
+            ORDER BY nable_source_name COLLATE NOCASE ASC
+            """
+        )
+        nable = [r[0] for r in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT DISTINCT sophos_source_name
+            FROM customers
+            WHERE sophos_source_name IS NOT NULL AND TRIM(sophos_source_name) <> ''
+            ORDER BY sophos_source_name COLLATE NOCASE ASC
+            """
+        )
+        sophos = [r[0] for r in cur.fetchall()]
+        conn.close()
+    return jsonify({"nable": nable, "sophos": sophos})
+
+
+@app.route("/api/platform-links", methods=["GET"])
+def api_platform_links():
+    links = load_platform_links()
+    return jsonify({"items": links, "count": len(links)})
+
+
+@app.route("/api/platform-links", methods=["POST"])
+def api_create_platform_link():
+    payload = request.get_json(silent=True) or {}
+    nable_name = str(payload.get("nable_name") or "").strip()
+    sophos_name = str(payload.get("sophos_name") or "").strip()
+    canonical_name = str(payload.get("canonical_name") or "").strip()
+    if not nable_name or not sophos_name:
+        return jsonify({"error": "nable_name and sophos_name are required"}), 400
+
+    nable_key = normalize_customer_name(nable_name)
+    sophos_key = normalize_customer_name(sophos_name)
+    if not nable_key or not sophos_key:
+        return jsonify({"error": "Unable to normalize one or both platform names"}), 400
+    if not canonical_name:
+        canonical_name = nable_name if len(nable_name) >= len(sophos_name) else sophos_name
+
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO platform_links (nable_key, sophos_key, canonical_name, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(nable_key) DO UPDATE SET
+                sophos_key=excluded.sophos_key,
+                canonical_name=excluded.canonical_name,
+                created_at=excluded.created_at
+            """,
+            (nable_key, sophos_key, canonical_name, utc_now_iso()),
+        )
+        conn.commit()
+        conn.close()
+
+    trigger_sync_async("platform-link")
+    return jsonify({"success": True, "message": "Platform link saved and sync started"}), 202
 
 
 @app.route("/api/merge-mappings", methods=["POST"])

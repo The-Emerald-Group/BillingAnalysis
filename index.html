@@ -202,6 +202,12 @@
         gap: 8px;
         flex-wrap: wrap;
       }
+      .platform-link-grid {
+        margin-top: 10px;
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr auto;
+        gap: 8px;
+      }
       .button.secondary {
         background: #1f2937;
         border-color: #334155;
@@ -304,6 +310,13 @@
               <button id="mergeButton" class="button" type="button">Merge</button>
             </div>
             <div id="mergeMessage" class="merge-msg">Map one customer name into another when auto-match misses.</div>
+            <h3 class="merge-title" style="margin-top:10px;">Link N-able to Sophos</h3>
+            <div class="platform-link-grid">
+              <select id="linkNable" class="merge-select"></select>
+              <select id="linkSophos" class="merge-select"></select>
+              <input id="linkCanonicalName" class="search" placeholder="Canonical company name" />
+              <button id="linkButton" class="button" type="button">Link</button>
+            </div>
             <div class="maintenance-actions">
               <button id="dedupeButton" class="button secondary" type="button">Cleanup Duplicate Names</button>
               <button id="resetMergesButton" class="button secondary" type="button">Reset Merges + Rebuild Cache</button>
@@ -356,6 +369,10 @@
       const mergeMessage = document.getElementById("mergeMessage");
       const dedupeButton = document.getElementById("dedupeButton");
       const resetMergesButton = document.getElementById("resetMergesButton");
+      const linkNable = document.getElementById("linkNable");
+      const linkSophos = document.getElementById("linkSophos");
+      const linkCanonicalName = document.getElementById("linkCanonicalName");
+      const linkButton = document.getElementById("linkButton");
       const compareButton = document.getElementById("compareButton");
       const compareSummary = document.getElementById("compareSummary");
       const compareWarnings = document.getElementById("compareWarnings");
@@ -417,6 +434,20 @@
           .join("");
         mergeFrom.innerHTML = `<option value="">Merge from...</option>${opts}`;
         mergeTo.innerHTML = `<option value="">Merge into...</option>${opts}`;
+      }
+
+      function renderPlatformOptions(options) {
+        const nableOpts = (options.nable || []).map((n) => `<option value="${String(n).replace(/"/g, "&quot;")}">${n}</option>`).join("");
+        const sophosOpts = (options.sophos || []).map((s) => `<option value="${String(s).replace(/"/g, "&quot;")}">${s}</option>`).join("");
+        linkNable.innerHTML = `<option value="">N-able company...</option>${nableOpts}`;
+        linkSophos.innerHTML = `<option value="">Sophos company...</option>${sophosOpts}`;
+      }
+
+      async function loadPlatformOptions() {
+        const res = await fetch("/api/platform-options");
+        if (!res.ok) return;
+        const data = await res.json();
+        renderPlatformOptions(data || {});
       }
 
       async function loadCustomers() {
@@ -573,6 +604,43 @@
         }
       }
 
+      async function createPlatformLink() {
+        const nableName = linkNable.value;
+        const sophosName = linkSophos.value;
+        const canonicalName = linkCanonicalName.value.trim();
+        if (!nableName || !sophosName) {
+          mergeMessage.textContent = "Select both N-able and Sophos names to link.";
+          return;
+        }
+
+        linkButton.disabled = true;
+        linkButton.textContent = "Linking...";
+        try {
+          const res = await fetch("/api/platform-links", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ nable_name: nableName, sophos_name: sophosName, canonical_name: canonicalName }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            mergeMessage.textContent = data.error || "Platform link failed.";
+            return;
+          }
+          mergeMessage.textContent = "Platform link created and sync started.";
+          await loadStatus();
+          await loadCustomers();
+          setTimeout(async () => {
+            await loadStatus();
+            await loadCustomers();
+          }, 4500);
+        } catch (err) {
+          mergeMessage.textContent = `Platform link failed: ${err}`;
+        } finally {
+          linkButton.disabled = false;
+          linkButton.textContent = "Link";
+        }
+      }
+
       function renderMissingList(targetEl, items) {
         if (!items.length) {
           targetEl.innerHTML = "<li>None</li>";
@@ -614,11 +682,13 @@
       mergeButton.addEventListener("click", createMergeMapping);
       dedupeButton.addEventListener("click", cleanupDuplicateNames);
       resetMergesButton.addEventListener("click", resetMergesAndRebuild);
+      linkButton.addEventListener("click", createPlatformLink);
       compareButton.addEventListener("click", runDeviceCompare);
 
       (async () => {
         await loadStatus();
         await loadCustomers();
+        await loadPlatformOptions();
       })();
     </script>
   </body>
