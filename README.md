@@ -38,8 +38,9 @@ docker compose up -d --build
 | `SYNC_INTERVAL_MINUTES` | `180` | Background sync interval |
 | `DB_PATH` | `/data/billing_cache.db` | SQLite cache location |
 | `NABLE_TOKEN` | required | N-able JWT token |
-| `NABLE_API_BASE` | `https://api.n-able.com` | N-able API base URL |
-| `NABLE_DEVICES_PATH` | `/devices` | N-able devices endpoint path |
+| `NABLE_API_BASE` | `https://ncod153.n-able.com` | N-able API host |
+| `NABLE_AUTH_PATH` | `/api/auth/authenticate` | N-able JWT authenticate path |
+| `NABLE_DEVICES_PATH` | `/api/devices` | N-able devices endpoint path |
 | `SOPHOS_CLIENT_ID` | required | Sophos API client ID |
 | `SOPHOS_CLIENT_SECRET` | required | Sophos API client secret |
 | `SOPHOS_TOKEN_URL` | `https://id.sophos.com/api/v2/oauth2/token` | Sophos OAuth token endpoint |

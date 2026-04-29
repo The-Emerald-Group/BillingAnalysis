@@ -6,8 +6,9 @@ services:
       - PORT=8083
       - SYNC_INTERVAL_MINUTES=180
       - NABLE_TOKEN=your_nable_jwt_here
-      - NABLE_API_BASE=https://api.n-able.com
-      - NABLE_DEVICES_PATH=/devices
+      - NABLE_API_BASE=https://ncod153.n-able.com
+      - NABLE_AUTH_PATH=/api/auth/authenticate
+      - NABLE_DEVICES_PATH=/api/devices
       - SOPHOS_CLIENT_ID=your_sophos_client_id_here
       - SOPHOS_CLIENT_SECRET=your_sophos_client_secret_here
       - REQUEST_TIMEOUT_SECONDS=30

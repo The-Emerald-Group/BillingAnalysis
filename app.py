@@ -17,8 +17,9 @@ SYNC_INTERVAL_MINUTES = int(os.environ.get("SYNC_INTERVAL_MINUTES", "180"))
 PORT = int(os.environ.get("PORT", "8083"))
 
 NABLE_TOKEN = os.environ.get("NABLE_TOKEN", "")
-NABLE_API_BASE = os.environ.get("NABLE_API_BASE", "https://api.n-able.com")
-NABLE_DEVICES_PATH = os.environ.get("NABLE_DEVICES_PATH", "/devices")
+NABLE_API_BASE = os.environ.get("NABLE_API_BASE", "https://ncod153.n-able.com")
+NABLE_AUTH_PATH = os.environ.get("NABLE_AUTH_PATH", "/api/auth/authenticate")
+NABLE_DEVICES_PATH = os.environ.get("NABLE_DEVICES_PATH", "/api/devices")
 
 SOPHOS_CLIENT_ID = os.environ.get("SOPHOS_CLIENT_ID", "")
 SOPHOS_CLIENT_SECRET = os.environ.get("SOPHOS_CLIENT_SECRET", "")
@@ -161,15 +162,45 @@ def extract_devices_from_response(payload) -> List[Dict]:
     return []
 
 
-def fetch_nable_counts() -> Dict[str, Dict]:
+def fetch_nable_access_token() -> str:
     if not NABLE_TOKEN:
         raise RuntimeError("Missing NABLE_TOKEN")
 
-    url = f"{NABLE_API_BASE.rstrip('/')}{NABLE_DEVICES_PATH}"
-    headers = {"Authorization": f"Bearer {NABLE_TOKEN}", "Accept": "application/json"}
-    response = request_with_retry("GET", url, headers=headers)
+    auth_url = f"{NABLE_API_BASE.rstrip('/')}{NABLE_AUTH_PATH}"
+    response = request_with_retry(
+        "POST",
+        auth_url,
+        headers={"Authorization": f"Bearer {NABLE_TOKEN}", "Accept": "application/json"},
+    )
     payload = response.json()
-    devices = extract_devices_from_response(payload)
+    token = ((payload.get("tokens") or {}).get("access") or {}).get("token")
+    if not token:
+        raise RuntimeError("N-able authenticate response missing access token")
+    return token
+
+
+def fetch_all_nable_devices(access_token: str) -> List[Dict]:
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+    devices: List[Dict] = []
+    next_url = f"{NABLE_API_BASE.rstrip('/')}{NABLE_DEVICES_PATH}?pageSize=1000"
+
+    while next_url:
+        response = request_with_retry("GET", next_url, headers=headers)
+        payload = response.json()
+        devices.extend(extract_devices_from_response(payload))
+
+        next_page = ((payload.get("_links") or {}).get("nextPage")) if isinstance(payload, dict) else None
+        if next_page:
+            next_url = f"{NABLE_API_BASE.rstrip('/')}{next_page}"
+        else:
+            next_url = None
+
+    return devices
+
+
+def fetch_nable_counts() -> Dict[str, Dict]:
+    access_token = fetch_nable_access_token()
+    devices = fetch_all_nable_devices(access_token)
 
     counts: Dict[str, Dict] = {}
     for device in devices:
@@ -210,7 +241,7 @@ def fetch_sophos_token() -> str:
 
 def fetch_sophos_counts() -> Dict[str, Dict]:
     token = fetch_sophos_token()
-    headers = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "", "Accept": "application/json"}
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
     whoami_resp = request_with_retry(
         "GET",
@@ -218,22 +249,34 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
         headers=headers,
     )
     whoami = whoami_resp.json()
+    id_type = whoami.get("idType")
+    if id_type != "partner":
+        raise RuntimeError(f"Sophos credential is not partner-level (idType={id_type})")
     partner_id = whoami.get("id")
-    partner_host = ((whoami.get("apiHosts") or {}).get("partner") or "https://api.central.sophos.com").rstrip("/")
-    endpoint_host_default = ((whoami.get("apiHosts") or {}).get("dataRegion") or "https://api.central.sophos.com").rstrip("/")
+    partner_host = "https://api.central.sophos.com"
     if not partner_id:
         raise RuntimeError("Sophos whoami response missing partner id")
 
-    tenants_url = f"{partner_host}/partner/v1/tenants?pageTotal=true&pageSize=500"
-    tenants_resp = request_with_retry(
-        "GET",
-        tenants_url,
-        headers={**headers, "X-Partner-ID": partner_id},
-    )
-    tenants_payload = tenants_resp.json()
-    tenants = tenants_payload.get("items") or tenants_payload.get("tenants") or []
-    if not isinstance(tenants, list):
-        tenants = []
+    tenants: List[Dict] = []
+    page = 1
+    while True:
+        params = {"pageSize": 100}
+        if page == 1:
+            params["pageTotal"] = "true"
+        else:
+            params["page"] = page
+        tenants_resp = request_with_retry(
+            "GET",
+            f"{partner_host}/partner/v1/tenants",
+            headers={**headers, "X-Partner-ID": partner_id},
+            params=params,
+        )
+        tenants_payload = tenants_resp.json()
+        tenants.extend(tenants_payload.get("items") or [])
+        total_pages = ((tenants_payload.get("pages") or {}).get("total")) or 1
+        if page >= total_pages:
+            break
+        page += 1
 
     counts: Dict[str, Dict] = {}
     for tenant in tenants:
@@ -242,14 +285,15 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
         if not tenant_id:
             continue
 
-        tenant_api_host = (tenant.get("apiHost") or endpoint_host_default).rstrip("/")
-        endpoint_url = f"{tenant_api_host}/endpoint/v1/endpoints?pageTotal=true&pageSize=1"
+        tenant_api_host = (tenant.get("apiHost") or "https://api.central.sophos.com").rstrip("/")
+        endpoint_url = f"{tenant_api_host}/endpoint/v1/endpoints"
         count = 0
         try:
             endpoint_resp = request_with_retry(
                 "GET",
                 endpoint_url,
                 headers={**headers, "X-Tenant-ID": tenant_id},
+                params={"pageSize": 1, "view": "full", "pageTotal": "true"},
             )
             endpoint_payload = endpoint_resp.json()
             pages = endpoint_payload.get("pages") or {}
