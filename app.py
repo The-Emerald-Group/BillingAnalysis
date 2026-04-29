@@ -719,7 +719,8 @@ def api_customers():
                     WHEN l.nable_count = l.sophos_count THEN 'match'
                     ELSE 'mismatch'
                 END AS count_status,
-                ABS(l.nable_count - l.sophos_count) AS count_delta
+                ABS(l.nable_count - l.sophos_count) AS count_delta,
+                ROUND((l.nable_count + l.sophos_count) / 2.0, 1) AS average_total
             FROM customers c
             INNER JOIN customer_counts_latest l ON l.customer_id = c.id
             ORDER BY c.display_name COLLATE NOCASE ASC
@@ -757,7 +758,8 @@ def api_customer(customer_id: int):
                     WHEN l.nable_count = l.sophos_count THEN 'match'
                     ELSE 'mismatch'
                 END AS count_status,
-                ABS(l.nable_count - l.sophos_count) AS count_delta
+                ABS(l.nable_count - l.sophos_count) AS count_delta,
+                ROUND((l.nable_count + l.sophos_count) / 2.0, 1) AS average_total
             FROM customers c
             INNER JOIN customer_counts_latest l ON l.customer_id = c.id
             WHERE c.id = ?

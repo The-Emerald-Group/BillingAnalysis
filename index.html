@@ -89,6 +89,7 @@
       .row-status { margin-top: 4px; font-size: 12px; }
       .row-status.match { color: #86efac; }
       .row-status.mismatch { color: #fde68a; }
+      .row-average { margin-top: 4px; font-size: 12px; color: #93c5fd; }
 
       .main {
         padding: 24px;
@@ -375,6 +376,7 @@
               <div class="icons">${iconMarkup(row)}</div>
             </div>
             <div class="row-counts">N-able: ${row.nable_count} • Sophos: ${row.sophos_count}</div>
+            <div class="row-average">Average total: ${row.average_total}</div>
             <div class="row-status ${row.count_status}">${statusText}</div>
           `;
           el.addEventListener("click", () => selectCustomer(row.id));
