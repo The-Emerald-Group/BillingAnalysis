@@ -70,6 +70,7 @@
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
+        align-items: center;
       }
       .counter-chip {
         border: 1px solid #334155;
@@ -78,6 +79,10 @@
         font-size: 12px;
         color: #cbd5e1;
         background: #0b1220;
+      }
+      .summary-note {
+        font-size: 12px;
+        color: #94a3b8;
       }
 
       .list {
@@ -294,8 +299,8 @@
           </div>
         </div>
         <div class="summary-counters">
-          <span id="allSummaryChip" class="counter-chip">All: Match 0 • Mismatch 0</span>
-          <span id="visibleSummaryChip" class="counter-chip">Visible: Match 0 • Mismatch 0</span>
+          <span id="summaryChip" class="counter-chip">Shown: Match 0 • Mismatch 0</span>
+          <span id="summaryNote" class="summary-note"></span>
         </div>
         <div id="customerList" class="list"></div>
       </aside>
@@ -373,8 +378,8 @@
       const searchInput = document.getElementById("searchInput");
       const statusFilter = document.getElementById("statusFilter");
       const sortFilter = document.getElementById("sortFilter");
-      const allSummaryChip = document.getElementById("allSummaryChip");
-      const visibleSummaryChip = document.getElementById("visibleSummaryChip");
+      const summaryChip = document.getElementById("summaryChip");
+      const summaryNote = document.getElementById("summaryNote");
       const syncText = document.getElementById("syncText");
       const syncPill = document.getElementById("syncPill");
       const refreshButton = document.getElementById("refreshButton");
@@ -452,8 +457,12 @@
         const summary = data.summary || {};
         const all = summary.all || {};
         const visible = summary.visible || {};
-        allSummaryChip.textContent = `All: Match ${all.matched || 0} • Mismatch ${all.mismatched || 0} • Total ${all.total || 0}`;
-        visibleSummaryChip.textContent = `Visible: Match ${visible.matched || 0} • Mismatch ${visible.mismatched || 0} • Total ${visible.total || 0}`;
+        summaryChip.textContent = `Shown: Match ${visible.matched || 0} • Mismatch ${visible.mismatched || 0} • Total ${visible.total || 0}`;
+        if ((all.total || 0) > (visible.total || 0)) {
+          summaryNote.textContent = `Filtered from ${all.total} total`;
+        } else {
+          summaryNote.textContent = "";
+        }
         renderList();
       }
 
