@@ -1049,6 +1049,11 @@ def index():
     return send_from_directory(APP_DIR, "index.html")
 
 
+@app.route("/settings")
+def settings_page():
+    return send_from_directory(APP_DIR, "settings.html")
+
+
 @app.route("/assets/<path:filename>")
 def assets(filename):
     return send_from_directory(os.path.join(APP_DIR, "assets"), filename)

@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Billing Portal Settings</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: Segoe UI, Arial, sans-serif;
+        background: #0f172a;
+        color: #e5e7eb;
+      }
+      .wrap { padding: 20px; max-width: 1200px; margin: 0 auto; }
+      .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom: 14px; }
+      .muted { color:#94a3b8; font-size: 13px; }
+      .button {
+        border: 1px solid #334155;
+        background: #1f2937;
+        color: #fff;
+        padding: 8px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .button.primary { background:#2563eb; border-color:#1d4ed8; }
+      .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      .panel { background:#111827; border:1px solid #1f2937; border-radius:10px; padding:12px; }
+      .list { max-height: 360px; overflow:auto; border:1px solid #253248; border-radius:8px; }
+      .row {
+        padding:8px 10px; border-bottom:1px solid #1f2937; cursor:pointer; font-size: 14px;
+      }
+      .row:last-child { border-bottom:none; }
+      .row.selected { background:#10203a; border-left:3px solid #60a5fa; }
+      .controls { margin-top: 12px; display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
+      input[type="text"] {
+        padding: 8px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; min-width: 260px;
+      }
+      .msg { margin-top: 10px; color:#93c5fd; font-size:13px; white-space: pre-wrap; }
+      table { width:100%; border-collapse: collapse; font-size: 13px; }
+      th, td { border-bottom:1px solid #1f2937; padding: 8px; text-align:left; }
+      .danger { color: #fca5a5; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="topbar">
+        <div>
+          <h2 style="margin:0;">Settings</h2>
+          <div class="muted">Manage cross-platform customer linking and maintenance tools.</div>
+        </div>
+        <a href="/" class="button" style="text-decoration:none;">Back to Main</a>
+      </div>
+
+      <div class="grid">
+        <section class="panel">
+          <h3 style="margin:0 0 8px;">N-able Customers</h3>
+          <div id="nableList" class="list"></div>
+        </section>
+        <section class="panel">
+          <h3 style="margin:0 0 8px;">Sophos Customers</h3>
+          <div id="sophosList" class="list"></div>
+        </section>
+      </div>
+
+      <section class="panel" style="margin-top:14px;">
+        <h3 style="margin:0 0 8px;">Create Platform Link</h3>
+        <div class="muted">Pick one N-able and one Sophos customer, then link them into one canonical company.</div>
+        <div class="controls">
+          <input id="canonicalName" type="text" placeholder="Canonical company name (optional)" />
+          <button id="linkBtn" class="button primary" type="button">Link Selected</button>
+        </div>
+        <div class="controls">
+          <button id="dedupeBtn" class="button" type="button">Cleanup Duplicate Names</button>
+          <button id="resetBtn" class="button danger" type="button">Reset Merges + Rebuild Cache</button>
+        </div>
+        <div id="msg" class="msg"></div>
+      </section>
+
+      <section class="panel" style="margin-top:14px;">
+        <h3 style="margin:0 0 8px;">Current Platform Links</h3>
+        <table>
+          <thead><tr><th>ID</th><th>N-able Key</th><th>Sophos Key</th><th>Canonical</th></tr></thead>
+          <tbody id="linksBody"></tbody>
+        </table>
+      </section>
+    </div>
+
+    <script>
+      const state = { nable: [], sophos: [], selectedNable: "", selectedSophos: "" };
+      const nableList = document.getElementById("nableList");
+      const sophosList = document.getElementById("sophosList");
+      const canonicalName = document.getElementById("canonicalName");
+      const linkBtn = document.getElementById("linkBtn");
+      const dedupeBtn = document.getElementById("dedupeBtn");
+      const resetBtn = document.getElementById("resetBtn");
+      const msg = document.getElementById("msg");
+      const linksBody = document.getElementById("linksBody");
+
+      function renderSelectableList(target, items, selectedValue, onSelect) {
+        target.innerHTML = "";
+        if (!items.length) {
+          target.innerHTML = '<div class="row">No entries</div>';
+          return;
+        }
+        items.forEach((item) => {
+          const row = document.createElement("div");
+          row.className = "row" + (item === selectedValue ? " selected" : "");
+          row.textContent = item;
+          row.addEventListener("click", () => onSelect(item));
+          target.appendChild(row);
+        });
+      }
+
+      function renderLists() {
+        renderSelectableList(nableList, state.nable, state.selectedNable, (item) => {
+          state.selectedNable = item;
+          renderLists();
+        });
+        renderSelectableList(sophosList, state.sophos, state.selectedSophos, (item) => {
+          state.selectedSophos = item;
+          renderLists();
+        });
+      }
+
+      async function loadOptions() {
+        const res = await fetch("/api/platform-options");
+        if (!res.ok) return;
+        const data = await res.json();
+        state.nable = data.nable || [];
+        state.sophos = data.sophos || [];
+        if (!state.nable.includes(state.selectedNable)) state.selectedNable = "";
+        if (!state.sophos.includes(state.selectedSophos)) state.selectedSophos = "";
+        renderLists();
+      }
+
+      async function loadLinks() {
+        const res = await fetch("/api/platform-links");
+        if (!res.ok) return;
+        const data = await res.json();
+        const rows = data.items || [];
+        linksBody.innerHTML = rows.map((r) => `<tr><td>${r.id}</td><td>${r.nable_key}</td><td>${r.sophos_key}</td><td>${r.canonical_name}</td></tr>`).join("");
+      }
+
+      async function createLink() {
+        if (!state.selectedNable || !state.selectedSophos) {
+          msg.textContent = "Select one N-able and one Sophos customer first.";
+          return;
+        }
+        linkBtn.disabled = true;
+        try {
+          const res = await fetch("/api/platform-links", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              nable_name: state.selectedNable,
+              sophos_name: state.selectedSophos,
+              canonical_name: canonicalName.value.trim(),
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            msg.textContent = data.error || "Link failed.";
+            return;
+          }
+          msg.textContent = "Link saved. Collapse + sync started.";
+          await Promise.all([loadOptions(), loadLinks()]);
+        } catch (err) {
+          msg.textContent = `Link failed: ${err}`;
+        } finally {
+          linkBtn.disabled = false;
+        }
+      }
+
+      async function dedupe() {
+        dedupeBtn.disabled = true;
+        try {
+          const res = await fetch("/api/maintenance/dedupe-display-names", { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) {
+            msg.textContent = data.error || "Cleanup failed.";
+            return;
+          }
+          msg.textContent = `Cleanup complete. Groups: ${data.summary?.groups_processed || 0}, rows removed: ${data.summary?.rows_removed || 0}.`;
+          await Promise.all([loadOptions(), loadLinks()]);
+        } catch (err) {
+          msg.textContent = `Cleanup failed: ${err}`;
+        } finally {
+          dedupeBtn.disabled = false;
+        }
+      }
+
+      async function resetAll() {
+        if (!window.confirm("Reset all merges/links and rebuild cache?")) return;
+        resetBtn.disabled = true;
+        try {
+          const res = await fetch("/api/maintenance/reset-merges", { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) {
+            msg.textContent = data.error || "Reset failed.";
+            return;
+          }
+          msg.textContent = "Reset started. Refreshing lists shortly...";
+          setTimeout(async () => {
+            await Promise.all([loadOptions(), loadLinks()]);
+          }, 5000);
+        } catch (err) {
+          msg.textContent = `Reset failed: ${err}`;
+        } finally {
+          resetBtn.disabled = false;
+        }
+      }
+
+      linkBtn.addEventListener("click", createLink);
+      dedupeBtn.addEventListener("click", dedupe);
+      resetBtn.addEventListener("click", resetAll);
+
+      (async () => {
+        await Promise.all([loadOptions(), loadLinks()]);
+      })();
+    </script>
+  </body>
+</html>
