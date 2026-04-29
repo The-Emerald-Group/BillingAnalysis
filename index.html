@@ -90,7 +90,7 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
-        max-height: calc(100vh - 150px);
+        max-height: calc(100vh - 220px);
         overflow: auto;
       }
 
@@ -235,8 +235,6 @@
         font-size: 12px;
       }
       .compare-table-wrap {
-        max-height: 320px;
-        overflow: auto;
         border: 1px solid #273449;
         border-radius: 8px;
       }
@@ -250,6 +248,12 @@
         padding: 8px;
         border-bottom: 1px solid #1f2937;
         text-align: left;
+      }
+      .compare-table th {
+        position: sticky;
+        top: 0;
+        background: #0b1220;
+        z-index: 1;
       }
       .compare-row-match {
         background: rgba(22, 163, 74, 0.14);
@@ -270,6 +274,27 @@
       .status-chip.mismatch {
         color: #fecaca;
         border-color: #7f1d1d;
+      }
+      .compare-counters {
+        margin-bottom: 8px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .compare-counter {
+        border: 1px solid #334155;
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 11px;
+      }
+      .compare-counter.miss-nable,
+      .compare-counter.miss-sophos {
+        color: #fecaca;
+        border-color: #7f1d1d;
+      }
+      .compare-counter.match {
+        color: #86efac;
+        border-color: #166534;
       }
     </style>
   </head>
@@ -347,6 +372,11 @@
             <div class="compare-columns">
               <div class="compare-col">
                 <h4>Device Comparison (Mismatches first)</h4>
+                <div class="compare-counters">
+                  <span id="missSophosCounter" class="compare-counter miss-sophos">Missing from Sophos: 0</span>
+                  <span id="missNableCounter" class="compare-counter miss-nable">Missing from N-able: 0</span>
+                  <span id="matchedCounter" class="compare-counter match">Matched: 0</span>
+                </div>
                 <div class="compare-table-wrap">
                   <table class="compare-table">
                     <thead>
@@ -392,6 +422,9 @@
       const compareSummary = document.getElementById("compareSummary");
       const compareWarnings = document.getElementById("compareWarnings");
       const compareRowsBody = document.getElementById("compareRowsBody");
+      const missSophosCounter = document.getElementById("missSophosCounter");
+      const missNableCounter = document.getElementById("missNableCounter");
+      const matchedCounter = document.getElementById("matchedCounter");
 
       function fmtDate(iso) {
         if (!iso) return "never";
@@ -480,6 +513,9 @@
         compareSummary.textContent = "";
         compareWarnings.textContent = "";
         compareRowsBody.innerHTML = "";
+        missSophosCounter.textContent = "Missing from Sophos: 0";
+        missNableCounter.textContent = "Missing from N-able: 0";
+        matchedCounter.textContent = "Matched: 0";
       }
 
       async function loadStatus() {
@@ -521,9 +557,14 @@
           const mismatch = r.status !== "match";
           const rowClass = mismatch ? "compare-row-mismatch" : "compare-row-match";
           const chipClass = mismatch ? "status-chip mismatch" : "status-chip match";
+          const label = r.status === "missing_from_sophos"
+            ? "Missing from Sophos"
+            : r.status === "missing_from_nable"
+              ? "Missing from N-able"
+              : "Match";
           return `
             <tr class="${rowClass}">
-              <td><span class="${chipClass}">${r.label}</span></td>
+              <td><span class="${chipClass}">${label}</span></td>
               <td>${r.display_name || ""}</td>
               <td>${r.nable_name || "—"}</td>
               <td>${r.sophos_name || "—"}</td>
@@ -550,6 +591,9 @@
           compareSummary.textContent = `Matched: ${data.matched_names} | N-able names: ${data.nable_total_names} | Sophos names: ${data.sophos_total_names}`;
           compareWarnings.textContent = (data.warnings || []).join("\n");
           renderComparisonRows(data.comparison_rows || []);
+          missSophosCounter.textContent = `Missing from Sophos: ${(data.missing_from_sophos || []).length}`;
+          missNableCounter.textContent = `Missing from N-able: ${(data.missing_from_nable || []).length}`;
+          matchedCounter.textContent = `Matched: ${data.matched_names || 0}`;
         } catch (err) {
           compareSummary.textContent = `Compare request failed: ${err}`;
         } finally {
