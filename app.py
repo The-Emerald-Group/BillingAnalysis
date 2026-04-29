@@ -1316,6 +1316,7 @@ def api_customer_device_compare(customer_id: int):
     for key in all_keys:
         n_name = nable_by_norm.get(key)
         s_name = sophos_by_norm.get(key)
+        near_match = None
         if n_name and s_name:
             status = "match"
             label = "Match"

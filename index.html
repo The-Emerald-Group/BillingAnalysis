@@ -761,9 +761,20 @@
         }, 1100);
         try {
           const res = await fetch(`/api/customers/${state.selectedId}/device-compare`);
-          const data = await res.json();
+          const isJson = (res.headers.get("content-type") || "").includes("application/json");
+          const data = isJson ? await res.json() : null;
           if (!res.ok) {
-            compareSummary.textContent = data.error || "Compare failed.";
+            if (data && data.error) {
+              compareSummary.textContent = data.error;
+            } else {
+              const bodyText = await res.text();
+              compareSummary.textContent = `Compare failed (HTTP ${res.status}).`;
+              compareWarnings.textContent = bodyText.slice(0, 300);
+            }
+            return;
+          }
+          if (!data) {
+            compareSummary.textContent = "Compare failed: server returned non-JSON response.";
             return;
           }
           compareSummary.textContent = `Matched: ${data.matched_names} | N-able names: ${data.nable_total_names} | Sophos names: ${data.sophos_total_names}`;
