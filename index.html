@@ -208,6 +208,12 @@
         font-size: 12px;
         margin-bottom: 10px;
       }
+      .compare-warn {
+        color: #fbbf24;
+        font-size: 12px;
+        margin-bottom: 8px;
+        white-space: pre-wrap;
+      }
       .compare-columns {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -296,6 +302,7 @@
               <button id="compareButton" class="button" type="button">Compare Device Names</button>
               <span id="compareSummary" class="compare-summary"></span>
             </div>
+            <div id="compareWarnings" class="compare-warn"></div>
             <div class="compare-columns">
               <div class="compare-col">
                 <h4>Missing from N-able</h4>
@@ -335,6 +342,7 @@
       const mergeMessage = document.getElementById("mergeMessage");
       const compareButton = document.getElementById("compareButton");
       const compareSummary = document.getElementById("compareSummary");
+      const compareWarnings = document.getElementById("compareWarnings");
       const missingFromNable = document.getElementById("missingFromNable");
       const missingFromSophos = document.getElementById("missingFromSophos");
 
@@ -415,6 +423,7 @@
         emptyState.style.display = "none";
         detailArea.style.display = "block";
         compareSummary.textContent = "";
+        compareWarnings.textContent = "";
         missingFromNable.innerHTML = "";
         missingFromSophos.innerHTML = "";
       }
@@ -463,7 +472,14 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ from_name: fromName, to_name: toName }),
           });
-          const data = await res.json();
+          let data = null;
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("application/json")) {
+            data = await res.json();
+          } else {
+            const text = await res.text();
+            throw new Error(`Unexpected non-JSON response: ${text.slice(0, 160)}`);
+          }
           if (!res.ok) {
             mergeMessage.textContent = data.error || "Merge mapping failed.";
             return;
@@ -503,6 +519,7 @@
             return;
           }
           compareSummary.textContent = `Matched: ${data.matched_names} | N-able names: ${data.nable_total_names} | Sophos names: ${data.sophos_total_names}`;
+          compareWarnings.textContent = (data.warnings || []).join("\n");
           renderMissingList(missingFromNable, data.missing_from_nable || []);
           renderMissingList(missingFromSophos, data.missing_from_sophos || []);
         } catch (err) {

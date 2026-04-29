@@ -605,7 +605,7 @@ def upsert_counts(
 
 def run_sync(trigger: str = "scheduled") -> Tuple[bool, str, Dict]:
     if not sync_lock.acquire(blocking=False):
-        return False, "Sync already in progress"
+        return False, "Sync already in progress", {"errors": {"sync": "Sync already in progress"}}
 
     started_at = utc_now_iso()
     runtime_state["sync_running"] = True
@@ -784,6 +784,9 @@ def api_customer_device_compare(customer_id: int):
     mappings = load_merge_mappings()
     nable_names: List[str] = []
     sophos_names: List[str] = []
+    warnings: List[str] = []
+    nable_source_name = (customer.get("nable_source_name") or "").strip().lower()
+    sophos_source_name = (customer.get("sophos_source_name") or "").strip().lower()
 
     # N-able side
     try:
@@ -792,12 +795,16 @@ def api_customer_device_compare(customer_id: int):
         for dev in nable_devices:
             cname = extract_nable_customer_name(dev)
             ckey = resolve_merge_key(normalize_customer_name(cname), mappings)
-            if ckey != normalized_target:
+            cname_l = (cname or "").strip().lower()
+            # Use both normalized key matching and exact source-name fallback.
+            if ckey != normalized_target and (not nable_source_name or cname_l != nable_source_name):
                 continue
             dname = extract_nable_device_name(dev)
             if dname:
                 nable_names.append(dname)
     except Exception as exc:
+        warn = f"N-able compare fetch failed: {exc}"
+        warnings.append(warn)
         logger.warning("Device compare N-able fetch failed customer_id=%s error=%s", customer_id, exc)
 
     # Sophos side
@@ -815,10 +822,18 @@ def api_customer_device_compare(customer_id: int):
             for tenant in tenants:
                 tenant_name = tenant.get("name", "")
                 tkey = resolve_merge_key(normalize_customer_name(tenant_name), mappings)
-                if tkey != normalized_target:
+                tenant_name_l = (tenant_name or "").strip().lower()
+                if tkey != normalized_target and (not sophos_source_name or tenant_name_l != sophos_source_name):
                     continue
-                sophos_names.extend(fetch_sophos_tenant_device_names(sophos_token, tenant))
+                try:
+                    sophos_names.extend(fetch_sophos_tenant_device_names(sophos_token, tenant))
+                except Exception as t_exc:
+                    t_warn = f"Sophos tenant compare fetch failed ({tenant_name}): {t_exc}"
+                    warnings.append(t_warn)
+                    logger.warning("Device compare Sophos tenant fetch failed customer_id=%s tenant=%s error=%s", customer_id, tenant_name, t_exc)
     except Exception as exc:
+        warn = f"Sophos compare fetch failed: {exc}"
+        warnings.append(warn)
         logger.warning("Device compare Sophos fetch failed customer_id=%s error=%s", customer_id, exc)
 
     nable_by_norm = {normalize_device_name(n): n for n in nable_names if normalize_device_name(n)}
@@ -838,6 +853,7 @@ def api_customer_device_compare(customer_id: int):
             "matched_names": len(nable_set & sophos_set),
             "missing_from_nable": missing_from_nable,
             "missing_from_sophos": missing_from_sophos,
+            "warnings": warnings,
         }
     )
 
