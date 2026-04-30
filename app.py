@@ -34,6 +34,7 @@ REQUEST_TIMEOUT_SECONDS = int(os.environ.get("REQUEST_TIMEOUT_SECONDS", "30"))
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
 RETRY_DELAY_SECONDS = float(os.environ.get("RETRY_DELAY_SECONDS", "1.5"))
 SOPHOS_RECENTLY_ONLINE_DAYS = int(os.environ.get("SOPHOS_RECENTLY_ONLINE_DAYS", "30"))
+ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT = (os.environ.get("ENABLE_RECENT_DEVICE_CUTOFF", "true").strip().lower() == "true")
 
 
 app = Flask(__name__, static_folder="assets")
@@ -82,12 +83,75 @@ def parse_iso_utc(raw: str):
         return None
 
 
-def is_recently_online(last_seen_at: str) -> bool:
+def parse_timestamp_utc(raw):
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+        if value > 1_000_000_000_000:
+            value = value / 1000.0
+        if value <= 0:
+            return None
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        except Exception:
+            return None
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        parsed_iso = parse_iso_utc(text)
+        if parsed_iso:
+            return parsed_iso.astimezone(timezone.utc)
+        try:
+            numeric = float(text)
+            return parse_timestamp_utc(numeric)
+        except Exception:
+            return None
+    return None
+
+
+def is_recently_online(last_seen_at: str, days: int = SOPHOS_RECENTLY_ONLINE_DAYS) -> bool:
     seen_dt = parse_iso_utc(last_seen_at)
     if not seen_dt:
         return False
     age = datetime.now(timezone.utc) - seen_dt.astimezone(timezone.utc)
-    return age.total_seconds() <= (SOPHOS_RECENTLY_ONLINE_DAYS * 86400)
+    return age.total_seconds() <= (days * 86400)
+
+
+def get_app_setting(key: str, default_value: str = "") -> str:
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
+        row = cur.fetchone()
+        conn.close()
+    if not row:
+        return default_value
+    return str(row[0] if row[0] is not None else default_value)
+
+
+def set_app_setting(key: str, value: str) -> None:
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value=excluded.value,
+                updated_at=excluded.updated_at
+            """,
+            (key, value, utc_now_iso()),
+        )
+        conn.commit()
+        conn.close()
+
+
+def get_app_setting_bool(key: str, default_value: bool = False) -> bool:
+    raw = get_app_setting(key, "true" if default_value else "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def singularize_token(token: str) -> str:
@@ -409,9 +473,26 @@ def init_db() -> None:
                 canonical_name TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         ensure_split_count_columns(cur)
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (
+                "enable_recent_device_cutoff",
+                "true" if ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT else "false",
+                utc_now_iso(),
+            ),
+        )
         conn.commit()
         conn.close()
 
@@ -572,9 +653,62 @@ def fetch_nable_counts() -> Dict[str, Dict]:
     access_token = fetch_nable_access_token()
     devices = fetch_all_nable_devices(access_token)
     merge_mappings = load_merge_mappings()
+    apply_recent_cutoff = get_app_setting_bool("enable_recent_device_cutoff", ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT)
+    cutoff_seconds = SOPHOS_RECENTLY_ONLINE_DAYS * 86400
+    cutoff_applied = 0
 
     counts: Dict[str, Dict] = {}
     for device in devices:
+        if apply_recent_cutoff:
+            last_seen_candidates = [
+                device.get("lastSeenAt"),
+                device.get("lastSeen"),
+                device.get("lastCheckIn"),
+                device.get("lastCheckInAt"),
+                device.get("lastOnline"),
+                device.get("lastOnlineAt"),
+                device.get("lastSync"),
+                device.get("lastSyncAt"),
+                device.get("lastActiveAt"),
+                device.get("lastActivityAt"),
+                device.get("lastBoot"),
+                device.get("lastBootAt"),
+                device.get("timeStamp"),
+                device.get("timestamp"),
+            ]
+            for nested_key in ("device", "agent", "system", "computer", "network"):
+                nested = device.get(nested_key)
+                if isinstance(nested, dict):
+                    last_seen_candidates.extend(
+                        [
+                            nested.get("lastSeenAt"),
+                            nested.get("lastSeen"),
+                            nested.get("lastCheckIn"),
+                            nested.get("lastCheckInAt"),
+                            nested.get("lastOnline"),
+                            nested.get("lastOnlineAt"),
+                            nested.get("lastSync"),
+                            nested.get("lastSyncAt"),
+                            nested.get("lastActiveAt"),
+                            nested.get("lastActivityAt"),
+                            nested.get("timeStamp"),
+                            nested.get("timestamp"),
+                        ]
+                    )
+
+            latest_seen = None
+            for candidate in last_seen_candidates:
+                parsed = parse_timestamp_utc(candidate)
+                if parsed and (latest_seen is None or parsed > latest_seen):
+                    latest_seen = parsed
+            if latest_seen is None:
+                cutoff_applied += 1
+                continue
+            age_seconds = (datetime.now(timezone.utc) - latest_seen).total_seconds()
+            if age_seconds > cutoff_seconds:
+                cutoff_applied += 1
+                continue
+
         raw_name = extract_nable_customer_name(device)
         normalized = normalize_customer_name(raw_name)
         normalized = resolve_merge_key(normalized, merge_mappings)
@@ -597,7 +731,12 @@ def fetch_nable_counts() -> Dict[str, Dict]:
         if len(raw_name) > len(counts[normalized]["display_name"]):
             counts[normalized]["display_name"] = raw_name
 
-    logger.info("N-able customer count aggregation complete customers=%s", len(counts))
+    logger.info(
+        "N-able customer count aggregation complete customers=%s recent_cutoff_enabled=%s filtered_devices=%s",
+        len(counts),
+        apply_recent_cutoff,
+        cutoff_applied,
+    )
     return counts
 
 
@@ -625,7 +764,12 @@ def fetch_sophos_token() -> str:
 
 
 def fetch_sophos_counts() -> Dict[str, Dict]:
-    logger.info("Starting Sophos count sync recently_online_days=%s", SOPHOS_RECENTLY_ONLINE_DAYS)
+    apply_recent_cutoff = get_app_setting_bool("enable_recent_device_cutoff", ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT)
+    logger.info(
+        "Starting Sophos count sync recently_online_days=%s recent_cutoff_enabled=%s",
+        SOPHOS_RECENTLY_ONLINE_DAYS,
+        apply_recent_cutoff,
+    )
     token = fetch_sophos_token()
     merge_mappings = load_merge_mappings()
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -694,7 +838,7 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
                 endpoint_payload = endpoint_resp.json()
                 items = endpoint_payload.get("items") or []
                 for item in items:
-                    if is_recently_online(item.get("lastSeenAt")):
+                    if (not apply_recent_cutoff) or is_recently_online(item.get("lastSeenAt")):
                         count += 1
                         endpoint_kind = classify_sophos_endpoint_kind(item)
                         if endpoint_kind == "server":
@@ -765,6 +909,7 @@ def fetch_sophos_tenant_device_entries(token: str, tenant: Dict) -> List[Dict[st
     if not tenant_id:
         return entries
 
+    apply_recent_cutoff = get_app_setting_bool("enable_recent_device_cutoff", ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT)
     next_key = None
     while True:
         params = {"pageSize": 500, "view": "full"}
@@ -779,7 +924,7 @@ def fetch_sophos_tenant_device_entries(token: str, tenant: Dict) -> List[Dict[st
         payload = resp.json()
         items = payload.get("items") or []
         for item in items:
-            if not is_recently_online(item.get("lastSeenAt")):
+            if apply_recent_cutoff and (not is_recently_online(item.get("lastSeenAt"))):
                 continue
             host = item.get("hostname")
             if isinstance(host, str) and host.strip():
@@ -1836,6 +1981,35 @@ def api_sync_status():
 def api_sync_run():
     trigger_sync_async("manual")
     return jsonify({"success": True, "message": "Sync started", "details": {}}), 202
+
+
+@app.route("/api/settings", methods=["GET"])
+def api_get_settings():
+    return jsonify(
+        {
+            "enable_recent_device_cutoff": get_app_setting_bool(
+                "enable_recent_device_cutoff",
+                ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT,
+            ),
+            "recent_device_cutoff_days": SOPHOS_RECENTLY_ONLINE_DAYS,
+        }
+    )
+
+
+@app.route("/api/settings", methods=["PUT"])
+def api_update_settings():
+    payload = request.get_json(silent=True) or {}
+    if "enable_recent_device_cutoff" not in payload:
+        return jsonify({"error": "enable_recent_device_cutoff is required"}), 400
+    enabled = bool(payload.get("enable_recent_device_cutoff"))
+    set_app_setting("enable_recent_device_cutoff", "true" if enabled else "false")
+    return jsonify(
+        {
+            "success": True,
+            "enable_recent_device_cutoff": enabled,
+            "recent_device_cutoff_days": SOPHOS_RECENTLY_ONLINE_DAYS,
+        }
+    )
 
 
 @app.route("/api/merge-mappings", methods=["GET"])

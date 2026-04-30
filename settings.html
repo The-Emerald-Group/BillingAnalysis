@@ -56,6 +56,15 @@
       </div>
 
       <section class="panel" style="margin-top:14px;">
+        <h3 style="margin:0 0 8px;">Device Cutoff</h3>
+        <div class="muted">Control whether N-able and Sophos only include devices seen in the last 30 days.</div>
+        <div class="controls">
+          <label><input id="recentCutoffToggle" type="checkbox" /> Apply 30-day active device cutoff</label>
+          <button id="saveSettingsBtn" class="button" type="button">Save Setting</button>
+        </div>
+      </section>
+
+      <section class="panel" style="margin-top:14px;">
         <h3 style="margin:0 0 8px;">Create Platform Link</h3>
         <div class="muted">Pick one N-able and one Sophos customer, then link them into one canonical company.</div>
         <div class="controls">
@@ -92,6 +101,8 @@
       const dedupeBtn = document.getElementById("dedupeBtn");
       const purgeEmptyBtn = document.getElementById("purgeEmptyBtn");
       const resetBtn = document.getElementById("resetBtn");
+      const recentCutoffToggle = document.getElementById("recentCutoffToggle");
+      const saveSettingsBtn = document.getElementById("saveSettingsBtn");
       const msg = document.getElementById("msg");
       const linksBody = document.getElementById("linksBody");
 
@@ -264,14 +275,49 @@
         }
       }
 
+      async function loadSettings() {
+        try {
+          const res = await fetch("/api/settings");
+          if (!res.ok) return;
+          const data = await res.json();
+          recentCutoffToggle.checked = Boolean(data.enable_recent_device_cutoff);
+        } catch (err) {
+          msg.textContent = `Failed to load settings: ${err}`;
+        }
+      }
+
+      async function saveSettings() {
+        saveSettingsBtn.disabled = true;
+        try {
+          const res = await fetch("/api/settings", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              enable_recent_device_cutoff: recentCutoffToggle.checked,
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            msg.textContent = data.error || "Save failed.";
+            return;
+          }
+          msg.textContent = "Setting saved. Run a sync to apply to cached counts.";
+        } catch (err) {
+          msg.textContent = `Save failed: ${err}`;
+        } finally {
+          saveSettingsBtn.disabled = false;
+        }
+      }
+
       linkBtn.addEventListener("click", createLink);
       showLinkedToggle.addEventListener("change", loadOptions);
       dedupeBtn.addEventListener("click", dedupe);
       purgeEmptyBtn.addEventListener("click", purgeEmptyDuplicates);
       resetBtn.addEventListener("click", resetAll);
+      saveSettingsBtn.addEventListener("click", saveSettings);
 
       (async () => {
-        await Promise.all([loadOptions(), loadLinks()]);
+        await Promise.all([loadOptions(), loadLinks(), loadSettings()]);
       })();
     </script>
   </body>
