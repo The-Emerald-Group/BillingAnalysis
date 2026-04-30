@@ -4,12 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>General Billing Portal</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
     <style>
       :root {
-        --bg: #0f172a;
+        --bg: #0b1220;
         --panel: #111827;
         --muted: #94a3b8;
-        --line: #1f2937;
+        --line: #243042;
         --text: #e5e7eb;
         --accent: #3b82f6;
         --good: #16a34a;
@@ -154,6 +155,7 @@
         padding: 8px 11px;
         border-radius: 8px;
         cursor: pointer;
+        font-weight: 600;
       }
       .button.secondary {
         border-color: #334155;
@@ -386,6 +388,14 @@
         border-color: #2563eb;
         color: #dbeafe;
       }
+      .compare-toggle {
+        border: 1px solid #334155;
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 12px;
+        background: #0b1220;
+        color: #cbd5e1;
+      }
       .checkbox-label {
         font-size: 12px;
         color: #cbd5e1;
@@ -491,7 +501,14 @@
                   <button id="filterMissSophosBtn" class="compare-filter-chip" type="button">Missing from Sophos</button>
                   <button id="filterMissNableBtn" class="compare-filter-chip" type="button">Missing from N-able</button>
                   <button id="filterMatchBtn" class="compare-filter-chip" type="button">Matched</button>
+                  <select id="kindFilter" class="compare-toggle">
+                    <option value="all">All Assets</option>
+                    <option value="server">Servers</option>
+                    <option value="device">Devices</option>
+                    <option value="mixed">Mixed Type</option>
+                  </select>
                   <label class="checkbox-label"><input id="showOnlyMismatch" type="checkbox" checked /> Show only mismatches</label>
+                  <label class="checkbox-label"><input id="separateKindsToggle" type="checkbox" /> Separate servers/devices view</label>
                   <button id="exportMismatchBtn" class="button secondary" type="button">Export Mismatches CSV</button>
                 </div>
                 <div class="compare-table-wrap">
@@ -499,6 +516,7 @@
                     <thead>
                       <tr>
                         <th>Status</th>
+                        <th>Category</th>
                         <th>Preferred Name</th>
                         <th>N-able</th>
                         <th>Sophos</th>
@@ -548,10 +566,13 @@
       const filterMissSophosBtn = document.getElementById("filterMissSophosBtn");
       const filterMissNableBtn = document.getElementById("filterMissNableBtn");
       const filterMatchBtn = document.getElementById("filterMatchBtn");
+      const kindFilter = document.getElementById("kindFilter");
       const showOnlyMismatch = document.getElementById("showOnlyMismatch");
+      const separateKindsToggle = document.getElementById("separateKindsToggle");
       const exportMismatchBtn = document.getElementById("exportMismatchBtn");
       let compareRows = [];
       let compareStatusFilter = "all";
+      let compareTotalsByKind = null;
 
       function fmtDate(iso) {
         if (!iso) return "never";
@@ -583,6 +604,10 @@
         }
         if (compareStatusFilter !== "all") {
           out = out.filter((r) => r.status === compareStatusFilter);
+        }
+        const kindValue = kindFilter.value || "all";
+        if (kindValue !== "all") {
+          out = out.filter((r) => (r.category_key || "device") === kindValue);
         }
         return out;
       }
@@ -670,8 +695,11 @@
         compareProgress.classList.remove("active");
         comparePhase.textContent = "";
         compareRows = [];
+        compareTotalsByKind = null;
         compareStatusFilter = "all";
         showOnlyMismatch.checked = true;
+        kindFilter.value = "all";
+        separateKindsToggle.checked = false;
         renderCompareFilterChips();
       }
 
@@ -708,7 +736,7 @@
       function renderComparisonRows(rows) {
         const visibleRows = applyCompareFilters(rows);
         if (!visibleRows || !visibleRows.length) {
-          compareRowsBody.innerHTML = `<tr><td colspan="4">No device names found.</td></tr>`;
+          compareRowsBody.innerHTML = `<tr><td colspan="5">No device names found.</td></tr>`;
           return;
         }
         compareRowsBody.innerHTML = visibleRows.map((r) => {
@@ -722,15 +750,19 @@
             : r.status === "missing_from_nable"
               ? "status-chip missing-nable"
               : "status-chip match";
+          const kind = r.category_key || "device";
+          const categoryLabel = kind === "server" ? "Server" : kind === "mixed" ? "Mixed" : "Device";
           const label = r.status === "missing_from_sophos"
             ? "Missing from Sophos"
             : r.status === "missing_from_nable"
               ? "Missing from N-able"
               : "Match";
+          const mismatch = r.status !== "match";
           const nearHint = r.near_match_hint && mismatch ? `<div class="hint-text">Near match on other side: ${r.near_match_hint}</div>` : "";
           return `
             <tr class="${rowClass}">
               <td><span class="${chipClass}">${label}</span></td>
+              <td>${categoryLabel}</td>
               <td>${r.display_name || ""}${nearHint}</td>
               <td>${r.nable_name || "—"}</td>
               <td>${r.sophos_name || "—"}</td>
@@ -777,14 +809,25 @@
             compareSummary.textContent = "Compare failed: server returned non-JSON response.";
             return;
           }
-          compareSummary.textContent = `Matched: ${data.matched_names} | N-able names: ${data.nable_total_names} | Sophos names: ${data.sophos_total_names}`;
+          compareTotalsByKind = data.totals_by_kind || null;
+          if (separateKindsToggle.checked && compareTotalsByKind) {
+            compareSummary.textContent = `Matched: ${data.matched_names} | N-able servers/devices: ${compareTotalsByKind.nable?.server || 0}/${compareTotalsByKind.nable?.device || 0} | Sophos servers/devices: ${compareTotalsByKind.sophos?.server || 0}/${compareTotalsByKind.sophos?.device || 0}`;
+          } else {
+            compareSummary.textContent = `Matched: ${data.matched_names} | N-able names: ${data.nable_total_names} | Sophos names: ${data.sophos_total_names}`;
+          }
           compareWarnings.textContent = (data.warnings || []).join("\n");
           compareRows = data.comparison_rows || [];
           renderCompareFilterChips();
           renderComparisonRows(compareRows);
-          missSophosCounter.textContent = `Missing from Sophos: ${(data.missing_from_sophos || []).length}`;
-          missNableCounter.textContent = `Missing from N-able: ${(data.missing_from_nable || []).length}`;
-          matchedCounter.textContent = `Matched: ${data.matched_names || 0}`;
+          if (separateKindsToggle.checked && compareTotalsByKind) {
+            missSophosCounter.textContent = `N-able Servers/Devices: ${compareTotalsByKind.nable?.server || 0}/${compareTotalsByKind.nable?.device || 0}`;
+            missNableCounter.textContent = `Sophos Servers/Devices: ${compareTotalsByKind.sophos?.server || 0}/${compareTotalsByKind.sophos?.device || 0}`;
+            matchedCounter.textContent = `Matched Servers/Devices: ${compareTotalsByKind.matched?.server || 0}/${compareTotalsByKind.matched?.device || 0}`;
+          } else {
+            missSophosCounter.textContent = `Missing from Sophos: ${(data.missing_from_sophos || []).length}`;
+            missNableCounter.textContent = `Missing from N-able: ${(data.missing_from_nable || []).length}`;
+            matchedCounter.textContent = `Matched: ${data.matched_names || 0}`;
+          }
         } catch (err) {
           compareSummary.textContent = `Compare request failed: ${err}`;
         } finally {
@@ -822,6 +865,26 @@
         renderComparisonRows(compareRows);
       });
       showOnlyMismatch.addEventListener("change", () => renderComparisonRows(compareRows));
+      kindFilter.addEventListener("change", () => renderComparisonRows(compareRows));
+      separateKindsToggle.addEventListener("change", () => {
+        if (!compareRows.length) return;
+        const totals = compareTotalsByKind || {};
+        if (separateKindsToggle.checked) {
+          compareSummary.textContent = `Separate view enabled | N-able servers/devices: ${totals.nable?.server || 0}/${totals.nable?.device || 0} | Sophos servers/devices: ${totals.sophos?.server || 0}/${totals.sophos?.device || 0}`;
+          missSophosCounter.textContent = `N-able Servers/Devices: ${totals.nable?.server || 0}/${totals.nable?.device || 0}`;
+          missNableCounter.textContent = `Sophos Servers/Devices: ${totals.sophos?.server || 0}/${totals.sophos?.device || 0}`;
+          matchedCounter.textContent = `Matched Servers/Devices: ${totals.matched?.server || 0}/${totals.matched?.device || 0}`;
+        } else {
+          const missingSophos = compareRows.filter((r) => r.status === "missing_from_sophos").length;
+          const missingNable = compareRows.filter((r) => r.status === "missing_from_nable").length;
+          const matched = compareRows.filter((r) => r.status === "match").length;
+          compareSummary.textContent = `Matched: ${matched} | N-able names: ${missingNable + matched} | Sophos names: ${missingSophos + matched}`;
+          missSophosCounter.textContent = `Missing from Sophos: ${missingSophos}`;
+          missNableCounter.textContent = `Missing from N-able: ${missingNable}`;
+          matchedCounter.textContent = `Matched: ${matched}`;
+        }
+        renderComparisonRows(compareRows);
+      });
       exportMismatchBtn.addEventListener("click", () => {
         const mismatches = (compareRows || []).filter((r) => r.status !== "match");
         if (!mismatches.length) {

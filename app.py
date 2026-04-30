@@ -15,7 +15,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("DB_PATH", os.path.join(APP_DIR, "data", "billing_cache.db"))
-SYNC_INTERVAL_MINUTES = int(os.environ.get("SYNC_INTERVAL_MINUTES", "180"))
+SYNC_INTERVAL_MINUTES = int(os.environ.get("SYNC_INTERVAL_MINUTES", "1440"))
 PORT = int(os.environ.get("PORT", "8083"))
 
 NABLE_TOKEN = os.environ.get("NABLE_TOKEN", "")
@@ -650,12 +650,12 @@ def fetch_sophos_tenants(token: str, partner_id: str) -> List[Dict]:
     return tenants
 
 
-def fetch_sophos_tenant_device_names(token: str, tenant: Dict) -> List[str]:
-    names: List[str] = []
+def fetch_sophos_tenant_device_entries(token: str, tenant: Dict) -> List[Dict[str, str]]:
+    entries: List[Dict[str, str]] = []
     tenant_id = tenant.get("id")
     api_host = (tenant.get("apiHost") or "https://api.central.sophos.com").rstrip("/")
     if not tenant_id:
-        return names
+        return entries
 
     next_key = None
     while True:
@@ -675,12 +675,99 @@ def fetch_sophos_tenant_device_names(token: str, tenant: Dict) -> List[str]:
                 continue
             host = item.get("hostname")
             if isinstance(host, str) and host.strip():
-                names.append(host.strip())
+                entries.append({"name": host.strip(), "kind": classify_sophos_endpoint_kind(item)})
         next_key = ((payload.get("pages") or {}).get("nextKey"))
         if not next_key:
             break
 
-    return names
+    return entries
+
+
+def classify_asset_kind(value: str) -> str:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return "device"
+    server_tokens = (
+        "server",
+        "windows server",
+        "domain controller",
+        "hyper-v",
+        "vm host",
+        "vcenter",
+        "linux server",
+        "ubuntu server",
+        "debian server",
+        "sql server",
+    )
+    if any(token in raw for token in server_tokens):
+        return "server"
+    return "device"
+
+
+def classify_nable_device_kind(device: Dict) -> str:
+    fields_to_probe = [
+        "deviceClass",
+        "deviceType",
+        "type",
+        "subType",
+        "role",
+        "os",
+        "osName",
+        "operatingSystem",
+        "platform",
+        "description",
+        "longName",
+        "name",
+    ]
+    for field in fields_to_probe:
+        value = device.get(field)
+        if isinstance(value, str) and value.strip():
+            if classify_asset_kind(value) == "server":
+                return "server"
+    for nested_key in ("device", "agent", "system", "computer", "network"):
+        nested = device.get(nested_key)
+        if not isinstance(nested, dict):
+            continue
+        for field in fields_to_probe:
+            value = nested.get(field)
+            if isinstance(value, str) and value.strip():
+                if classify_asset_kind(value) == "server":
+                    return "server"
+    return "device"
+
+
+def classify_sophos_endpoint_kind(endpoint: Dict) -> str:
+    fields_to_probe = [
+        "type",
+        "endpointType",
+        "productType",
+        "os",
+        "osName",
+        "platform",
+        "role",
+        "hostname",
+    ]
+    for field in fields_to_probe:
+        value = endpoint.get(field)
+        if isinstance(value, str) and value.strip():
+            if classify_asset_kind(value) == "server":
+                return "server"
+    return "device"
+
+
+def merge_kind(existing_kind: str, incoming_kind: str) -> str:
+    kinds = {existing_kind or "device", incoming_kind or "device"}
+    if "server" in kinds:
+        return "server"
+    return "device"
+
+
+def choose_category_for_row(nable_kind: str, sophos_kind: str) -> str:
+    n_kind = nable_kind or "device"
+    s_kind = sophos_kind or "device"
+    if n_kind and s_kind and n_kind != s_kind:
+        return "mixed"
+    return n_kind or s_kind or "device"
 
 
 def get_customer_by_id(customer_id: int):
@@ -1282,8 +1369,8 @@ def api_customer_device_compare(customer_id: int):
 
     normalized_target = customer["normalized_key"]
     mappings = load_merge_mappings()
-    nable_names: List[str] = []
-    sophos_names: List[str] = []
+    nable_entries: List[Dict[str, str]] = []
+    sophos_entries: List[Dict[str, str]] = []
     warnings: List[str] = []
     nable_source_name = (customer.get("nable_source_name") or "").strip().lower()
     sophos_source_name = (customer.get("sophos_source_name") or "").strip().lower()
@@ -1299,9 +1386,11 @@ def api_customer_device_compare(customer_id: int):
             # Use both normalized key matching and exact source-name fallback.
             if ckey != normalized_target and (not nable_source_name or cname_l != nable_source_name):
                 continue
+            kind = classify_nable_device_kind(dev)
             aliases = extract_nable_device_name_candidates(dev)
             if aliases:
-                nable_names.extend(aliases)
+                for alias in aliases:
+                    nable_entries.append({"name": alias, "kind": kind})
     except Exception as exc:
         warn = f"N-able compare fetch failed: {exc}"
         warnings.append(warn)
@@ -1326,7 +1415,7 @@ def api_customer_device_compare(customer_id: int):
                 if tkey != normalized_target and (not sophos_source_name or tenant_name_l != sophos_source_name):
                     continue
                 try:
-                    sophos_names.extend(fetch_sophos_tenant_device_names(sophos_token, tenant))
+                    sophos_entries.extend(fetch_sophos_tenant_device_entries(sophos_token, tenant))
                 except Exception as t_exc:
                     t_warn = f"Sophos tenant compare fetch failed ({tenant_name}): {t_exc}"
                     warnings.append(t_warn)
@@ -1336,8 +1425,29 @@ def api_customer_device_compare(customer_id: int):
         warnings.append(warn)
         logger.warning("Device compare Sophos fetch failed customer_id=%s error=%s", customer_id, exc)
 
-    nable_by_norm = {normalize_device_name(n): n for n in nable_names if normalize_device_name(n)}
-    sophos_by_norm = {normalize_device_name(n): n for n in sophos_names if normalize_device_name(n)}
+    nable_by_norm: Dict[str, str] = {}
+    nable_kind_by_norm: Dict[str, str] = {}
+    for entry in nable_entries:
+        normalized_name = normalize_device_name(str(entry.get("name") or ""))
+        if not normalized_name:
+            continue
+        nable_by_norm[normalized_name] = str(entry.get("name") or "")
+        nable_kind_by_norm[normalized_name] = merge_kind(
+            nable_kind_by_norm.get(normalized_name, "device"),
+            str(entry.get("kind") or "device"),
+        )
+
+    sophos_by_norm: Dict[str, str] = {}
+    sophos_kind_by_norm: Dict[str, str] = {}
+    for entry in sophos_entries:
+        normalized_name = normalize_device_name(str(entry.get("name") or ""))
+        if not normalized_name:
+            continue
+        sophos_by_norm[normalized_name] = str(entry.get("name") or "")
+        sophos_kind_by_norm[normalized_name] = merge_kind(
+            sophos_kind_by_norm.get(normalized_name, "device"),
+            str(entry.get("kind") or "device"),
+        )
     nable_set = set(nable_by_norm.keys())
     sophos_set = set(sophos_by_norm.keys())
 
@@ -1359,6 +1469,9 @@ def api_customer_device_compare(customer_id: int):
     for key in all_keys:
         n_name = nable_by_norm.get(key)
         s_name = sophos_by_norm.get(key)
+        n_kind = nable_kind_by_norm.get(key)
+        s_kind = sophos_kind_by_norm.get(key)
+        category_key = choose_category_for_row(n_kind, s_kind)
         near_match = None
         if n_name and s_name:
             status = "match"
@@ -1388,6 +1501,9 @@ def api_customer_device_compare(customer_id: int):
                 "display_name": display,
                 "nable_name": n_name,
                 "sophos_name": s_name,
+                "category_key": category_key,
+                "nable_kind": n_kind or "device",
+                "sophos_kind": s_kind or "device",
                 "near_match_hint": near_match,
                 "sort_rank": sort_rank,
             }
@@ -1404,6 +1520,32 @@ def api_customer_device_compare(customer_id: int):
             "matched_names": len(nable_set & sophos_set),
             "missing_from_nable": missing_from_nable,
             "missing_from_sophos": missing_from_sophos,
+            "totals_by_kind": {
+                "nable": {
+                    "server": len([k for k in nable_set if nable_kind_by_norm.get(k) == "server"]),
+                    "device": len([k for k in nable_set if nable_kind_by_norm.get(k) != "server"]),
+                },
+                "sophos": {
+                    "server": len([k for k in sophos_set if sophos_kind_by_norm.get(k) == "server"]),
+                    "device": len([k for k in sophos_set if sophos_kind_by_norm.get(k) != "server"]),
+                },
+                "matched": {
+                    "server": len(
+                        [
+                            k
+                            for k in (nable_set & sophos_set)
+                            if choose_category_for_row(nable_kind_by_norm.get(k), sophos_kind_by_norm.get(k)) == "server"
+                        ]
+                    ),
+                    "device": len(
+                        [
+                            k
+                            for k in (nable_set & sophos_set)
+                            if choose_category_for_row(nable_kind_by_norm.get(k), sophos_kind_by_norm.get(k)) != "server"
+                        ]
+                    ),
+                },
+            },
             "warnings": warnings,
             "comparison_rows": comparison_rows,
         }

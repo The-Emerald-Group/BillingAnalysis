@@ -4,41 +4,25 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Billing Portal Settings</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
     <style>
-      body {
-        margin: 0;
-        font-family: Segoe UI, Arial, sans-serif;
-        background: #0f172a;
-        color: #e5e7eb;
-      }
       .wrap { padding: 20px; max-width: 1200px; margin: 0 auto; }
       .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom: 14px; }
-      .muted { color:#94a3b8; font-size: 13px; }
-      .button {
-        border: 1px solid #334155;
-        background: #1f2937;
-        color: #fff;
-        padding: 8px 12px;
-        border-radius: 8px;
-        cursor: pointer;
-      }
-      .button.primary { background:#2563eb; border-color:#1d4ed8; }
+      .muted { color:var(--muted); font-size: 13px; }
       .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-      .panel { background:#111827; border:1px solid #1f2937; border-radius:10px; padding:12px; }
-      .list { max-height: 360px; overflow:auto; border:1px solid #253248; border-radius:8px; }
+      .panel { padding: 12px; }
+      .list { max-height: 360px; overflow:auto; border:1px solid var(--line); border-radius:8px; }
       .row {
-        padding:8px 10px; border-bottom:1px solid #1f2937; cursor:pointer; font-size: 14px;
+        padding:8px 10px; border-bottom:1px solid var(--line-soft); cursor:pointer; font-size: 14px;
       }
       .row:last-child { border-bottom:none; }
       .row.selected { background:#10203a; border-left:3px solid #60a5fa; }
       .controls { margin-top: 12px; display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
       .controls label { font-size: 13px; color: #cbd5e1; }
       input[type="text"] {
-        padding: 8px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; min-width: 260px;
+        padding: 10px 12px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; min-width: 260px;
       }
-      .msg { margin-top: 10px; color:#93c5fd; font-size:13px; white-space: pre-wrap; }
-      table { width:100%; border-collapse: collapse; font-size: 13px; }
-      th, td { border-bottom:1px solid #1f2937; padding: 8px; text-align:left; }
+      .msg { margin-top: 10px; color:#93c5fd; font-size:13px; white-space: pre-wrap; min-height: 18px; }
       .danger { color: #fca5a5; }
       .link-delete {
         border:1px solid #7f1d1d;
@@ -79,7 +63,7 @@
         </div>
         <div class="controls">
           <input id="canonicalName" type="text" placeholder="Canonical company name (optional)" />
-          <button id="linkBtn" class="button primary" type="button">Link Selected</button>
+          <button id="linkBtn" class="button" type="button">Link Selected</button>
         </div>
         <div class="controls">
           <button id="dedupeBtn" class="button" type="button">Cleanup Duplicate Names</button>
@@ -91,7 +75,7 @@
 
       <section class="panel" style="margin-top:14px;">
         <h3 style="margin:0 0 8px;">Current Platform Links</h3>
-        <table>
+        <table class="table">
           <thead><tr><th>ID</th><th>N-able Key</th><th>Sophos Key</th><th>Canonical</th><th>Action</th></tr></thead>
           <tbody id="linksBody"></tbody>
         </table>
