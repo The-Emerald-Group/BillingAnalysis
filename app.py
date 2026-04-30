@@ -168,6 +168,8 @@ def apply_platform_links(nable_counts: Dict[str, Dict], sophos_counts: Dict[str,
             nable_result[joined_key] = {
                 "display_name": canonical_name,
                 "count": int(nentry.get("count") or 0),
+                "server_count": int(nentry.get("server_count") or 0),
+                "device_count": int(nentry.get("device_count") or 0),
                 "source_name": nentry.get("source_name") or nentry.get("display_name"),
             }
             consumed_nable.add(nkey)
@@ -175,6 +177,8 @@ def apply_platform_links(nable_counts: Dict[str, Dict], sophos_counts: Dict[str,
             sophos_result[joined_key] = {
                 "display_name": canonical_name,
                 "count": int(sentry.get("count") or 0),
+                "server_count": int(sentry.get("server_count") or 0),
+                "device_count": int(sentry.get("device_count") or 0),
                 "source_name": sentry.get("source_name") or sentry.get("display_name"),
             }
             consumed_sophos.add(skey)
@@ -196,7 +200,15 @@ def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key:
 
         cur.execute(
             """
-            SELECT c.id, c.normalized_key, l.nable_count, l.sophos_count
+            SELECT
+                c.id,
+                c.normalized_key,
+                l.nable_count,
+                l.nable_server_count,
+                l.nable_device_count,
+                l.sophos_count,
+                l.sophos_server_count,
+                l.sophos_device_count
             FROM customers c
             LEFT JOIN customer_counts_latest l ON l.customer_id = c.id
             WHERE c.normalized_key IN (?, ?, ?)
@@ -205,7 +217,11 @@ def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key:
         )
         rows = [dict(r) for r in cur.fetchall()]
         total_nable = sum(int((r.get("nable_count") or 0)) for r in rows)
+        total_nable_server = sum(int((r.get("nable_server_count") or 0)) for r in rows)
+        total_nable_device = sum(int((r.get("nable_device_count") or 0)) for r in rows)
         total_sophos = sum(int((r.get("sophos_count") or 0)) for r in rows)
+        total_sophos_server = sum(int((r.get("sophos_server_count") or 0)) for r in rows)
+        total_sophos_device = sum(int((r.get("sophos_device_count") or 0)) for r in rows)
         synced_at = utc_now_iso()
 
         cur.execute(
@@ -223,11 +239,26 @@ def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key:
         cur.execute(
             """
             INSERT INTO customer_counts_latest
-                (customer_id, nable_count, sophos_count, has_nable, has_sophos, last_synced_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (
+                    customer_id,
+                    nable_count,
+                    nable_server_count,
+                    nable_device_count,
+                    sophos_count,
+                    sophos_server_count,
+                    sophos_device_count,
+                    has_nable,
+                    has_sophos,
+                    last_synced_at
+                )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(customer_id) DO UPDATE SET
                 nable_count=excluded.nable_count,
+                nable_server_count=excluded.nable_server_count,
+                nable_device_count=excluded.nable_device_count,
                 sophos_count=excluded.sophos_count,
+                sophos_server_count=excluded.sophos_server_count,
+                sophos_device_count=excluded.sophos_device_count,
                 has_nable=excluded.has_nable,
                 has_sophos=excluded.has_sophos,
                 last_synced_at=excluded.last_synced_at
@@ -235,7 +266,11 @@ def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key:
             (
                 joined_customer_id,
                 total_nable,
+                total_nable_server,
+                total_nable_device,
                 total_sophos,
+                total_sophos_server,
+                total_sophos_device,
                 1 if total_nable > 0 else 0,
                 1 if total_sophos > 0 else 0,
                 synced_at,
@@ -244,10 +279,28 @@ def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key:
 
         cur.execute(
             """
-            INSERT INTO customer_count_history (customer_id, nable_count, sophos_count, captured_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO customer_count_history (
+                customer_id,
+                nable_count,
+                nable_server_count,
+                nable_device_count,
+                sophos_count,
+                sophos_server_count,
+                sophos_device_count,
+                captured_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (joined_customer_id, total_nable, total_sophos, synced_at),
+            (
+                joined_customer_id,
+                total_nable,
+                total_nable_server,
+                total_nable_device,
+                total_sophos,
+                total_sophos_server,
+                total_sophos_device,
+                synced_at,
+            ),
         )
 
         # Remove source rows so UI immediately shows single canonical entry.
@@ -275,6 +328,24 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+def ensure_column(cur: sqlite3.Cursor, table_name: str, column_name: str, definition_sql: str) -> None:
+    cur.execute(f"PRAGMA table_info({table_name})")
+    existing = {str(row[1]) for row in cur.fetchall()}
+    if column_name not in existing:
+        cur.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition_sql}")
+
+
+def ensure_split_count_columns(cur: sqlite3.Cursor) -> None:
+    ensure_column(cur, "customer_counts_latest", "nable_server_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cur, "customer_counts_latest", "nable_device_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cur, "customer_counts_latest", "sophos_server_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cur, "customer_counts_latest", "sophos_device_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cur, "customer_count_history", "nable_server_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cur, "customer_count_history", "nable_device_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cur, "customer_count_history", "sophos_server_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cur, "customer_count_history", "sophos_device_count", "INTEGER NOT NULL DEFAULT 0")
+
+
 def init_db() -> None:
     ensure_db_dir()
     with db_lock:
@@ -293,7 +364,11 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS customer_counts_latest (
                 customer_id INTEGER PRIMARY KEY,
                 nable_count INTEGER NOT NULL DEFAULT 0,
+                nable_server_count INTEGER NOT NULL DEFAULT 0,
+                nable_device_count INTEGER NOT NULL DEFAULT 0,
                 sophos_count INTEGER NOT NULL DEFAULT 0,
+                sophos_server_count INTEGER NOT NULL DEFAULT 0,
+                sophos_device_count INTEGER NOT NULL DEFAULT 0,
                 has_nable INTEGER NOT NULL DEFAULT 0,
                 has_sophos INTEGER NOT NULL DEFAULT 0,
                 last_synced_at TEXT NOT NULL,
@@ -304,7 +379,11 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 customer_id INTEGER NOT NULL,
                 nable_count INTEGER NOT NULL DEFAULT 0,
+                nable_server_count INTEGER NOT NULL DEFAULT 0,
+                nable_device_count INTEGER NOT NULL DEFAULT 0,
                 sophos_count INTEGER NOT NULL DEFAULT 0,
+                sophos_server_count INTEGER NOT NULL DEFAULT 0,
+                sophos_device_count INTEGER NOT NULL DEFAULT 0,
                 captured_at TEXT NOT NULL,
                 FOREIGN KEY(customer_id) REFERENCES customers(id)
             );
@@ -332,6 +411,7 @@ def init_db() -> None:
             );
             """
         )
+        ensure_split_count_columns(cur)
         conn.commit()
         conn.close()
 
@@ -500,9 +580,20 @@ def fetch_nable_counts() -> Dict[str, Dict]:
         normalized = resolve_merge_key(normalized, merge_mappings)
         if not normalized:
             continue
+        kind = classify_nable_device_kind(device)
         if normalized not in counts:
-            counts[normalized] = {"display_name": raw_name, "count": 0, "source_name": raw_name}
+            counts[normalized] = {
+                "display_name": raw_name,
+                "count": 0,
+                "server_count": 0,
+                "device_count": 0,
+                "source_name": raw_name,
+            }
         counts[normalized]["count"] += 1
+        if kind == "server":
+            counts[normalized]["server_count"] += 1
+        else:
+            counts[normalized]["device_count"] += 1
         if len(raw_name) > len(counts[normalized]["display_name"]):
             counts[normalized]["display_name"] = raw_name
 
@@ -586,6 +677,8 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
         tenant_api_host = (tenant.get("apiHost") or "https://api.central.sophos.com").rstrip("/")
         endpoint_url = f"{tenant_api_host}/endpoint/v1/endpoints"
         count = 0
+        server_count = 0
+        device_count = 0
         try:
             next_key = None
             while True:
@@ -603,12 +696,19 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
                 for item in items:
                     if is_recently_online(item.get("lastSeenAt")):
                         count += 1
+                        endpoint_kind = classify_sophos_endpoint_kind(item)
+                        if endpoint_kind == "server":
+                            server_count += 1
+                        else:
+                            device_count += 1
                 next_key = ((endpoint_payload.get("pages") or {}).get("nextKey"))
                 if not next_key:
                     break
         except Exception as exc:
             logger.warning("Sophos tenant endpoint count failed tenant=%s tenant_id=%s error=%s", tenant_name, tenant_id, exc)
             count = 0
+            server_count = 0
+            device_count = 0
 
         normalized = normalize_customer_name(tenant_name)
         normalized = resolve_merge_key(normalized, merge_mappings)
@@ -616,8 +716,16 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
             continue
 
         if normalized not in counts:
-            counts[normalized] = {"display_name": tenant_name, "count": 0, "source_name": tenant_name}
+            counts[normalized] = {
+                "display_name": tenant_name,
+                "count": 0,
+                "server_count": 0,
+                "device_count": 0,
+                "source_name": tenant_name,
+            }
         counts[normalized]["count"] += count
+        counts[normalized]["server_count"] += server_count
+        counts[normalized]["device_count"] += device_count
         if len(tenant_name) > len(counts[normalized]["display_name"]):
             counts[normalized]["display_name"] = tenant_name
 
@@ -831,7 +939,11 @@ def upsert_counts(
             nable_source_name = (nable_entry.get("source_name") or nable_entry.get("display_name")) if nable_entry else None
             sophos_source_name = (sophos_entry.get("source_name") or sophos_entry.get("display_name")) if sophos_entry else None
             nable_count = int(nable_entry["count"]) if nable_entry else 0
+            nable_server_count = int(nable_entry.get("server_count") or 0) if nable_entry else 0
+            nable_device_count = int(nable_entry.get("device_count") or 0) if nable_entry else 0
             sophos_count = int(sophos_entry["count"]) if sophos_entry else 0
+            sophos_server_count = int(sophos_entry.get("server_count") or 0) if sophos_entry else 0
+            sophos_device_count = int(sophos_entry.get("device_count") or 0) if sophos_entry else 0
             has_nable = 1 if nable_count > 0 else 0
             has_sophos = 1 if sophos_count > 0 else 0
 
@@ -852,23 +964,67 @@ def upsert_counts(
             cur.execute(
                 """
                 INSERT INTO customer_counts_latest
-                    (customer_id, nable_count, sophos_count, has_nable, has_sophos, last_synced_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (
+                        customer_id,
+                        nable_count,
+                        nable_server_count,
+                        nable_device_count,
+                        sophos_count,
+                        sophos_server_count,
+                        sophos_device_count,
+                        has_nable,
+                        has_sophos,
+                        last_synced_at
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(customer_id) DO UPDATE SET
                     nable_count=excluded.nable_count,
+                    nable_server_count=excluded.nable_server_count,
+                    nable_device_count=excluded.nable_device_count,
                     sophos_count=excluded.sophos_count,
+                    sophos_server_count=excluded.sophos_server_count,
+                    sophos_device_count=excluded.sophos_device_count,
                     has_nable=excluded.has_nable,
                     has_sophos=excluded.has_sophos,
                     last_synced_at=excluded.last_synced_at
                 """,
-                (customer_id, nable_count, sophos_count, has_nable, has_sophos, synced_at),
+                (
+                    customer_id,
+                    nable_count,
+                    nable_server_count,
+                    nable_device_count,
+                    sophos_count,
+                    sophos_server_count,
+                    sophos_device_count,
+                    has_nable,
+                    has_sophos,
+                    synced_at,
+                ),
             )
             cur.execute(
                 """
-                INSERT INTO customer_count_history (customer_id, nable_count, sophos_count, captured_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO customer_count_history (
+                    customer_id,
+                    nable_count,
+                    nable_server_count,
+                    nable_device_count,
+                    sophos_count,
+                    sophos_server_count,
+                    sophos_device_count,
+                    captured_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (customer_id, nable_count, sophos_count, synced_at),
+                (
+                    customer_id,
+                    nable_count,
+                    nable_server_count,
+                    nable_device_count,
+                    sophos_count,
+                    sophos_server_count,
+                    sophos_device_count,
+                    synced_at,
+                ),
             )
 
         if prune_missing:
@@ -880,7 +1036,11 @@ def upsert_counts(
                     """
                     UPDATE customer_counts_latest
                     SET nable_count = 0,
+                        nable_server_count = 0,
+                        nable_device_count = 0,
                         sophos_count = 0,
+                        sophos_server_count = 0,
+                        sophos_device_count = 0,
                         has_nable = 0,
                         has_sophos = 0,
                         last_synced_at = ?
@@ -890,8 +1050,17 @@ def upsert_counts(
                 )
                 cur.execute(
                     """
-                    INSERT INTO customer_count_history (customer_id, nable_count, sophos_count, captured_at)
-                    VALUES (?, 0, 0, ?)
+                    INSERT INTO customer_count_history (
+                        customer_id,
+                        nable_count,
+                        nable_server_count,
+                        nable_device_count,
+                        sophos_count,
+                        sophos_server_count,
+                        sophos_device_count,
+                        captured_at
+                    )
+                    VALUES (?, 0, 0, 0, 0, 0, 0, ?)
                     """,
                     (stale_id, synced_at),
                 )
@@ -936,7 +1105,16 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
 
         cur.execute(
             """
-            SELECT nable_count, sophos_count, has_nable, has_sophos, last_synced_at
+            SELECT
+                nable_count,
+                nable_server_count,
+                nable_device_count,
+                sophos_count,
+                sophos_server_count,
+                sophos_device_count,
+                has_nable,
+                has_sophos,
+                last_synced_at
             FROM customer_counts_latest
             WHERE customer_id = ?
             """,
@@ -945,7 +1123,16 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
         from_latest = cur.fetchone()
         cur.execute(
             """
-            SELECT nable_count, sophos_count, has_nable, has_sophos, last_synced_at
+            SELECT
+                nable_count,
+                nable_server_count,
+                nable_device_count,
+                sophos_count,
+                sophos_server_count,
+                sophos_device_count,
+                has_nable,
+                has_sophos,
+                last_synced_at
             FROM customer_counts_latest
             WHERE customer_id = ?
             """,
@@ -954,21 +1141,48 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
         to_latest = cur.fetchone()
 
         from_nable = int((from_latest["nable_count"] if from_latest else 0) or 0)
+        from_nable_server = int((from_latest["nable_server_count"] if from_latest else 0) or 0)
+        from_nable_device = int((from_latest["nable_device_count"] if from_latest else 0) or 0)
         from_sophos = int((from_latest["sophos_count"] if from_latest else 0) or 0)
+        from_sophos_server = int((from_latest["sophos_server_count"] if from_latest else 0) or 0)
+        from_sophos_device = int((from_latest["sophos_device_count"] if from_latest else 0) or 0)
         to_nable = int((to_latest["nable_count"] if to_latest else 0) or 0)
+        to_nable_server = int((to_latest["nable_server_count"] if to_latest else 0) or 0)
+        to_nable_device = int((to_latest["nable_device_count"] if to_latest else 0) or 0)
         to_sophos = int((to_latest["sophos_count"] if to_latest else 0) or 0)
+        to_sophos_server = int((to_latest["sophos_server_count"] if to_latest else 0) or 0)
+        to_sophos_device = int((to_latest["sophos_device_count"] if to_latest else 0) or 0)
         merged_nable = from_nable + to_nable
+        merged_nable_server = from_nable_server + to_nable_server
+        merged_nable_device = from_nable_device + to_nable_device
         merged_sophos = from_sophos + to_sophos
+        merged_sophos_server = from_sophos_server + to_sophos_server
+        merged_sophos_device = from_sophos_device + to_sophos_device
         merged_synced = utc_now_iso()
 
         cur.execute(
             """
             INSERT INTO customer_counts_latest
-                (customer_id, nable_count, sophos_count, has_nable, has_sophos, last_synced_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (
+                    customer_id,
+                    nable_count,
+                    nable_server_count,
+                    nable_device_count,
+                    sophos_count,
+                    sophos_server_count,
+                    sophos_device_count,
+                    has_nable,
+                    has_sophos,
+                    last_synced_at
+                )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(customer_id) DO UPDATE SET
                 nable_count=excluded.nable_count,
+                nable_server_count=excluded.nable_server_count,
+                nable_device_count=excluded.nable_device_count,
                 sophos_count=excluded.sophos_count,
+                sophos_server_count=excluded.sophos_server_count,
+                sophos_device_count=excluded.sophos_device_count,
                 has_nable=excluded.has_nable,
                 has_sophos=excluded.has_sophos,
                 last_synced_at=excluded.last_synced_at
@@ -976,7 +1190,11 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
             (
                 to_customer["id"],
                 merged_nable,
+                merged_nable_server,
+                merged_nable_device,
                 merged_sophos,
+                merged_sophos_server,
+                merged_sophos_device,
                 1 if merged_nable > 0 else 0,
                 1 if merged_sophos > 0 else 0,
                 merged_synced,
@@ -984,10 +1202,28 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
         )
         cur.execute(
             """
-            INSERT INTO customer_count_history (customer_id, nable_count, sophos_count, captured_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO customer_count_history (
+                customer_id,
+                nable_count,
+                nable_server_count,
+                nable_device_count,
+                sophos_count,
+                sophos_server_count,
+                sophos_device_count,
+                captured_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (to_customer["id"], merged_nable, merged_sophos, merged_synced),
+            (
+                to_customer["id"],
+                merged_nable,
+                merged_nable_server,
+                merged_nable_device,
+                merged_sophos,
+                merged_sophos_server,
+                merged_sophos_device,
+                merged_synced,
+            ),
         )
 
         cur.execute("DELETE FROM customer_counts_latest WHERE customer_id = ?", (from_customer["id"],))
@@ -1014,7 +1250,12 @@ def dedupe_customers_by_display_name() -> Dict[str, int]:
                 c.nable_source_name,
                 c.sophos_source_name,
                 l.nable_count,
+                l.nable_server_count,
+                l.nable_device_count,
                 l.sophos_count
+                ,
+                l.sophos_server_count,
+                l.sophos_device_count
             FROM customers c
             INNER JOIN customer_counts_latest l ON l.customer_id = c.id
             ORDER BY LOWER(c.display_name), c.id
@@ -1037,13 +1278,21 @@ def dedupe_customers_by_display_name() -> Dict[str, int]:
             primary = members_sorted[0]
             others = members_sorted[1:]
             total_nable = sum(int(m.get("nable_count") or 0) for m in members_sorted)
+            total_nable_server = sum(int(m.get("nable_server_count") or 0) for m in members_sorted)
+            total_nable_device = sum(int(m.get("nable_device_count") or 0) for m in members_sorted)
             total_sophos = sum(int(m.get("sophos_count") or 0) for m in members_sorted)
+            total_sophos_server = sum(int(m.get("sophos_server_count") or 0) for m in members_sorted)
+            total_sophos_device = sum(int(m.get("sophos_device_count") or 0) for m in members_sorted)
 
             cur.execute(
                 """
                 UPDATE customer_counts_latest
                 SET nable_count = ?,
+                    nable_server_count = ?,
+                    nable_device_count = ?,
                     sophos_count = ?,
+                    sophos_server_count = ?,
+                    sophos_device_count = ?,
                     has_nable = ?,
                     has_sophos = ?,
                     last_synced_at = ?
@@ -1051,7 +1300,11 @@ def dedupe_customers_by_display_name() -> Dict[str, int]:
                 """,
                 (
                     total_nable,
+                    total_nable_server,
+                    total_nable_device,
                     total_sophos,
+                    total_sophos_server,
+                    total_sophos_device,
                     1 if total_nable > 0 else 0,
                     1 if total_sophos > 0 else 0,
                     utc_now_iso(),
@@ -1252,7 +1505,11 @@ def api_customers():
                 c.nable_source_name,
                 c.sophos_source_name,
                 l.nable_count,
+                l.nable_server_count,
+                l.nable_device_count,
                 l.sophos_count,
+                l.sophos_server_count,
+                l.sophos_device_count,
                 l.has_nable,
                 l.has_sophos,
                 l.last_synced_at,
@@ -1332,7 +1589,11 @@ def api_customer(customer_id: int):
                 c.nable_source_name,
                 c.sophos_source_name,
                 l.nable_count,
+                l.nable_server_count,
+                l.nable_device_count,
                 l.sophos_count,
+                l.sophos_server_count,
+                l.sophos_device_count,
                 l.has_nable,
                 l.has_sophos,
                 l.last_synced_at,

@@ -140,6 +140,17 @@
       }
       .status-left { font-size: 13px; color: var(--muted); }
       .status-right { display: flex; gap: 10px; align-items: center; }
+      .global-toggle {
+        font-size: 12px;
+        color: #cbd5e1;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px;
+        border: 1px solid #334155;
+        border-radius: 999px;
+        background: #0b1220;
+      }
       .pill {
         font-size: 12px;
         border-radius: 999px;
@@ -450,6 +461,7 @@
           <div id="syncText" class="status-left">Loading sync status...</div>
           <div class="status-right">
             <span id="syncPill" class="pill">unknown</span>
+            <label class="global-toggle"><input id="globalSplitToggle" type="checkbox" /> Separate servers/devices</label>
             <a href="/settings" class="button secondary" style="text-decoration:none;">Settings</a>
             <button id="refreshButton" class="button" type="button">Run Sync</button>
           </div>
@@ -462,19 +474,37 @@
             <article class="card">
               <div class="card-top">
                 <img src="/assets/nable.svg" class="logo" alt="N-able logo" />
-                <span>N-able Devices</span>
+                <span id="nableCardTitle">N-able Devices</span>
               </div>
               <div id="nableCount" class="count">0</div>
-              <div class="card-sub">Managed devices discovered in N-able</div>
+              <div id="nableCardSub" class="card-sub">Managed devices discovered in N-able</div>
             </article>
 
             <article class="card">
               <div class="card-top">
                 <img src="/assets/sophos.svg" class="logo" alt="Sophos logo" />
-                <span>Sophos Devices</span>
+                <span id="sophosCardTitle">Sophos Devices</span>
               </div>
               <div id="sophosCount" class="count">0</div>
-              <div class="card-sub">Managed endpoints discovered in Sophos</div>
+              <div id="sophosCardSub" class="card-sub">Managed endpoints discovered in Sophos</div>
+            </article>
+
+            <article id="nableServerCard" class="card" style="display:none;">
+              <div class="card-top">
+                <img src="/assets/nable.svg" class="logo" alt="N-able logo" />
+                <span>N-able Servers</span>
+              </div>
+              <div id="nableServerCount" class="count">0</div>
+              <div class="card-sub">Managed server endpoints in N-able</div>
+            </article>
+
+            <article id="sophosServerCard" class="card" style="display:none;">
+              <div class="card-top">
+                <img src="/assets/sophos.svg" class="logo" alt="Sophos logo" />
+                <span>Sophos Servers</span>
+              </div>
+              <div id="sophosServerCount" class="count">0</div>
+              <div class="card-sub">Managed server endpoints in Sophos</div>
             </article>
           </div>
           <div class="compare-box">
@@ -537,6 +567,8 @@
         customers: [],
         filtered: [],
         selectedId: null,
+        selectedCustomer: null,
+        listSummary: null,
       };
 
       const customerList = document.getElementById("customerList");
@@ -553,6 +585,15 @@
       const customerName = document.getElementById("customerName");
       const nableCount = document.getElementById("nableCount");
       const sophosCount = document.getElementById("sophosCount");
+      const nableCardTitle = document.getElementById("nableCardTitle");
+      const sophosCardTitle = document.getElementById("sophosCardTitle");
+      const nableCardSub = document.getElementById("nableCardSub");
+      const sophosCardSub = document.getElementById("sophosCardSub");
+      const nableServerCard = document.getElementById("nableServerCard");
+      const sophosServerCard = document.getElementById("sophosServerCard");
+      const nableServerCount = document.getElementById("nableServerCount");
+      const sophosServerCount = document.getElementById("sophosServerCount");
+      const globalSplitToggle = document.getElementById("globalSplitToggle");
       const compareButton = document.getElementById("compareButton");
       const compareSummary = document.getElementById("compareSummary");
       const compareWarnings = document.getElementById("compareWarnings");
@@ -595,6 +636,57 @@
       function escapedCsv(v) {
         const s = String(v == null ? "" : v);
         return `"${s.replaceAll('"', '""')}"`;
+      }
+
+      function splitModeEnabled() {
+        return !!globalSplitToggle.checked;
+      }
+
+      function renderSummaryCounters() {
+        const summary = state.listSummary || {};
+        const all = summary.all || {};
+        const visible = summary.visible || {};
+        if (splitModeEnabled()) {
+          const nableDevices = state.filtered.reduce((acc, r) => acc + Number(r.nable_device_count || 0), 0);
+          const nableServers = state.filtered.reduce((acc, r) => acc + Number(r.nable_server_count || 0), 0);
+          const sophosDevices = state.filtered.reduce((acc, r) => acc + Number(r.sophos_device_count || 0), 0);
+          const sophosServers = state.filtered.reduce((acc, r) => acc + Number(r.sophos_server_count || 0), 0);
+          summaryChip.textContent = `Shown: Match ${visible.matched || 0} • Mismatch ${visible.mismatched || 0} • Devices N/S ${nableDevices}/${sophosDevices} • Servers N/S ${nableServers}/${sophosServers}`;
+        } else {
+          summaryChip.textContent = `Shown: Match ${visible.matched || 0} • Mismatch ${visible.mismatched || 0} • Total ${visible.total || 0}`;
+        }
+        if ((all.total || 0) > (visible.total || 0)) {
+          summaryNote.textContent = `Filtered from ${all.total} total`;
+        } else {
+          summaryNote.textContent = "";
+        }
+      }
+
+      function renderSelectedCustomerCards() {
+        const data = state.selectedCustomer;
+        if (!data) return;
+        const separate = splitModeEnabled();
+        if (separate) {
+          nableCardTitle.textContent = "N-able Devices";
+          sophosCardTitle.textContent = "Sophos Devices";
+          nableCardSub.textContent = "Workstations/endpoints only (servers excluded)";
+          sophosCardSub.textContent = "Workstations/endpoints only (servers excluded)";
+          nableCount.textContent = String(data.nable_device_count || 0);
+          sophosCount.textContent = String(data.sophos_device_count || 0);
+          nableServerCount.textContent = String(data.nable_server_count || 0);
+          sophosServerCount.textContent = String(data.sophos_server_count || 0);
+          nableServerCard.style.display = "block";
+          sophosServerCard.style.display = "block";
+        } else {
+          nableCardTitle.textContent = "N-able Devices";
+          sophosCardTitle.textContent = "Sophos Devices";
+          nableCardSub.textContent = "Managed devices discovered in N-able";
+          sophosCardSub.textContent = "Managed endpoints discovered in Sophos";
+          nableCount.textContent = String(data.nable_count || 0);
+          sophosCount.textContent = String(data.sophos_count || 0);
+          nableServerCard.style.display = "none";
+          sophosServerCard.style.display = "none";
+        }
       }
 
       function applyCompareFilters(rows) {
@@ -646,7 +738,11 @@
               <div class="name">${row.display_name}</div>
               <div class="icons">${iconMarkup(row)}</div>
             </div>
-            <div class="row-counts">N-able: ${row.nable_count} • Sophos: ${row.sophos_count}</div>
+            <div class="row-counts">${
+              splitModeEnabled()
+                ? `N-able Devices/Servers: ${row.nable_device_count || 0}/${row.nable_server_count || 0} • Sophos Devices/Servers: ${row.sophos_device_count || 0}/${row.sophos_server_count || 0}`
+                : `N-able: ${row.nable_count} • Sophos: ${row.sophos_count}`
+            }</div>
             <div class="row-average">Average total: ${row.average_total}</div>
             <div class="row-status ${row.count_status}">${statusText}</div>
           `;
@@ -663,15 +759,8 @@
         const data = await res.json();
         state.customers = data.items || [];
         state.filtered = state.customers;
-        const summary = data.summary || {};
-        const all = summary.all || {};
-        const visible = summary.visible || {};
-        summaryChip.textContent = `Shown: Match ${visible.matched || 0} • Mismatch ${visible.mismatched || 0} • Total ${visible.total || 0}`;
-        if ((all.total || 0) > (visible.total || 0)) {
-          summaryNote.textContent = `Filtered from ${all.total} total`;
-        } else {
-          summaryNote.textContent = "";
-        }
+        state.listSummary = data.summary || {};
+        renderSummaryCounters();
         renderList();
       }
 
@@ -681,9 +770,9 @@
         const res = await fetch(`/api/customers/${id}`);
         if (!res.ok) return;
         const data = await res.json();
+        state.selectedCustomer = data;
         customerName.textContent = data.display_name;
-        nableCount.textContent = String(data.nable_count || 0);
-        sophosCount.textContent = String(data.sophos_count || 0);
+        renderSelectedCustomerCards();
         emptyState.style.display = "none";
         detailArea.style.display = "block";
         compareSummary.textContent = "";
@@ -843,6 +932,11 @@
       statusFilter.addEventListener("change", loadCustomers);
       sortFilter.addEventListener("change", loadCustomers);
       refreshButton.addEventListener("click", runSync);
+      globalSplitToggle.addEventListener("change", () => {
+        renderSummaryCounters();
+        renderList();
+        renderSelectedCustomerCards();
+      });
       compareButton.addEventListener("click", runDeviceCompare);
       filterAllBtn.addEventListener("click", () => {
         compareStatusFilter = "all";
