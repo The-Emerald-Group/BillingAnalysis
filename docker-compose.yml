@@ -4,7 +4,7 @@ services:
     container_name: billing-portal
     environment:
       - PORT=8083
-      - SYNC_INTERVAL_MINUTES=180
+      - SYNC_INTERVAL_MINUTES=1440
       - NABLE_TOKEN=your_nable_jwt_here
       - NABLE_API_BASE=https://ncod153.n-able.com
       - NABLE_AUTH_PATH=/api/auth/authenticate

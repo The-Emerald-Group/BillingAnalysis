@@ -4,7 +4,7 @@ A lightweight, self-hosted billing portal that aggregates device counts per cust
 
 ## Current Feature Set
 
-- Scheduled background sync (default every 3 hours) with manual run trigger.
+- Scheduled background sync (default once per day) with manual run trigger.
 - Detailed sync logging to `stdout` for Docker/Portainer visibility.
 - Partial-success sync behavior (one provider can fail while the other still updates cache).
 - Searchable customer list with provider icons and status-aware highlighting.
@@ -49,7 +49,7 @@ docker compose up -d --build
 ## Configuration
 
 - `PORT` (default `8083`): Web server port.
-- `SYNC_INTERVAL_MINUTES` (default `180`): Background sync interval.
+- `SYNC_INTERVAL_MINUTES` (default `1440`): Background sync interval.
 - `DB_PATH` (default `/data/billing_cache.db`): SQLite cache location.
 - `NABLE_TOKEN` (required): N-able JWT token.
 - `NABLE_API_BASE` (default `https://ncod153.n-able.com`): N-able API host.
