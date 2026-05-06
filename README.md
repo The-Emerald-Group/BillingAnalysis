@@ -58,7 +58,8 @@ docker compose up -d --build
 - `SOPHOS_CLIENT_ID` (required): Sophos API client ID.
 - `SOPHOS_CLIENT_SECRET` (required): Sophos API client secret.
 - `SOPHOS_TOKEN_URL` (default `https://id.sophos.com/api/v2/oauth2/token`): Sophos OAuth token endpoint.
-- `SOPHOS_RECENTLY_ONLINE_DAYS` (default `30`): Include only Sophos endpoints seen within this window.
+- `RECENT_DEVICE_CUTOFF_DAYS` (default `30`): Base cutoff window (used as initial/default for each provider).
+- `SOPHOS_RECENTLY_ONLINE_DAYS` (legacy fallback, default `30`): Used only when `RECENT_DEVICE_CUTOFF_DAYS` is not set.
 - `REQUEST_TIMEOUT_SECONDS` (default `30`): HTTP timeout per call.
 - `MAX_RETRIES` (default `3`): Retry attempts for provider API calls.
 - `RETRY_DELAY_SECONDS` (default `1.5`): Retry backoff multiplier.
@@ -79,6 +80,14 @@ docker compose up -d --build
 - `GET /api/customers/<id>/device-compare`: Device-level comparison for one customer.
 - `GET /api/sync/status`: Sync metadata and latest run status.
 - `POST /api/sync/run`: Trigger async/manual sync.
+- `GET /api/settings`: Read cutoff settings (global + provider-specific).
+- `PUT /api/settings`: Update cutoff settings (supports provider-specific fields).
+
+### Cutoff Modes
+
+- Global mode (default): one cutoff toggle + day value applies to both N-able and Sophos.
+- Provider mode: configure N-able and Sophos cutoff toggle/day values independently.
+- Both modes are managed in `/settings` under **Device Cutoff**.
 - `GET /api/merge-mappings`: List manual merge mappings.
 - `POST /api/merge-mappings`: Create manual merge mapping.
 - `GET /api/platform-options`: Candidate names for manual linking.
@@ -110,7 +119,7 @@ SQLite tables:
 - **N-able 404 on auth**: Check `NABLE_API_BASE` and `NABLE_AUTH_PATH` are not duplicating `/api`.
 - **Only one provider updates**: Expected when run is partial; inspect logs for provider-specific errors.
 - **Merge/link not visible immediately**: Use `/settings` and confirm the link exists in "Current Platform Links".
-- **No Sophos devices in compare**: Verify endpoints are recently online (`SOPHOS_RECENTLY_ONLINE_DAYS`).
+- **No Sophos devices in compare**: Verify endpoints are recently online (Settings -> Device Cutoff days).
 - **No data shown**: Verify credentials and run manual sync.
 - **Logs**: `docker logs billing-portal` (or container name used in your stack).
 

@@ -19,9 +19,12 @@
       .row.selected { background:#10203a; border-left:3px solid #60a5fa; }
       .controls { margin-top: 12px; display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
       .controls label { font-size: 13px; color: #cbd5e1; }
-      input[type="text"] {
+      input[type="text"], input[type="number"] {
         padding: 10px 12px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; min-width: 260px;
       }
+      .section-title { font-size: 13px; font-weight: 600; color: #dbeafe; margin-right: 10px; }
+      .subtle-note { font-size: 12px; color: #94a3b8; margin-top: 6px; }
+      .disabled-section { opacity: 0.55; }
       .msg { margin-top: 10px; color:#93c5fd; font-size:13px; white-space: pre-wrap; min-height: 18px; }
       .danger { color: #fca5a5; }
       .link-delete {
@@ -57,10 +60,33 @@
 
       <section class="panel" style="margin-top:14px;">
         <h3 style="margin:0 0 8px;">Device Cutoff</h3>
-        <div class="muted">Control whether N-able and Sophos only include devices seen in the last 30 days.</div>
+        <div class="muted">Choose a simple global cutoff or manage N-able and Sophos separately.</div>
         <div class="controls">
-          <label><input id="recentCutoffToggle" type="checkbox" /> Apply 30-day active device cutoff</label>
-          <button id="saveSettingsBtn" class="button" type="button">Save Setting</button>
+          <label><input id="useGlobalCutoff" type="checkbox" /> Use one cutoff for both providers (recommended)</label>
+        </div>
+        <div class="controls">
+          <span class="section-title">Global</span>
+          <label><input id="recentCutoffToggleGlobal" type="checkbox" /> Apply active device cutoff</label>
+          <label for="recentCutoffDaysGlobal">Days</label>
+          <input id="recentCutoffDaysGlobal" type="number" min="1" max="3650" step="1" value="30" style="min-width:120px;" />
+        </div>
+        <div id="providerCutoffSection">
+        <div class="controls">
+          <span class="section-title">N-able</span>
+          <label><input id="recentCutoffToggleNable" type="checkbox" /> N-able cutoff</label>
+          <label for="recentCutoffDaysNable">N-able days</label>
+          <input id="recentCutoffDaysNable" type="number" min="1" max="3650" step="1" value="30" style="min-width:120px;" />
+        </div>
+        <div class="controls">
+          <span class="section-title">Sophos</span>
+          <label><input id="recentCutoffToggleSophos" type="checkbox" /> Sophos cutoff</label>
+          <label for="recentCutoffDaysSophos">Sophos days</label>
+          <input id="recentCutoffDaysSophos" type="number" min="1" max="3650" step="1" value="30" style="min-width:120px;" />
+        </div>
+        </div>
+        <div id="cutoffModeHint" class="subtle-note"></div>
+        <div class="controls">
+          <button id="saveSettingsBtn" class="button" type="button">Save Cutoff Settings</button>
         </div>
       </section>
 
@@ -101,7 +127,15 @@
       const dedupeBtn = document.getElementById("dedupeBtn");
       const purgeEmptyBtn = document.getElementById("purgeEmptyBtn");
       const resetBtn = document.getElementById("resetBtn");
-      const recentCutoffToggle = document.getElementById("recentCutoffToggle");
+      const useGlobalCutoff = document.getElementById("useGlobalCutoff");
+      const recentCutoffToggleGlobal = document.getElementById("recentCutoffToggleGlobal");
+      const recentCutoffDaysGlobal = document.getElementById("recentCutoffDaysGlobal");
+      const recentCutoffToggleNable = document.getElementById("recentCutoffToggleNable");
+      const recentCutoffDaysNable = document.getElementById("recentCutoffDaysNable");
+      const recentCutoffToggleSophos = document.getElementById("recentCutoffToggleSophos");
+      const recentCutoffDaysSophos = document.getElementById("recentCutoffDaysSophos");
+      const providerCutoffSection = document.getElementById("providerCutoffSection");
+      const cutoffModeHint = document.getElementById("cutoffModeHint");
       const saveSettingsBtn = document.getElementById("saveSettingsBtn");
       const msg = document.getElementById("msg");
       const linksBody = document.getElementById("linksBody");
@@ -275,12 +309,34 @@
         }
       }
 
+      function updateCutoffModeUi() {
+        const globalMode = useGlobalCutoff.checked;
+        providerCutoffSection.classList.toggle("disabled-section", globalMode);
+        recentCutoffToggleNable.disabled = globalMode;
+        recentCutoffDaysNable.disabled = globalMode;
+        recentCutoffToggleSophos.disabled = globalMode;
+        recentCutoffDaysSophos.disabled = globalMode;
+        cutoffModeHint.textContent = globalMode
+          ? "Global mode is ON: one toggle and day value applies to both N-able and Sophos."
+          : "Global mode is OFF: N-able and Sophos use separate toggle/day values.";
+      }
+
       async function loadSettings() {
         try {
           const res = await fetch("/api/settings");
           if (!res.ok) return;
           const data = await res.json();
-          recentCutoffToggle.checked = Boolean(data.enable_recent_device_cutoff);
+          useGlobalCutoff.checked = Boolean(data.use_global_device_cutoff);
+          recentCutoffToggleGlobal.checked = Boolean(data.enable_recent_device_cutoff);
+          const globalDays = Number(data.recent_device_cutoff_days || 30);
+          recentCutoffDaysGlobal.value = Number.isFinite(globalDays) && globalDays > 0 ? String(globalDays) : "30";
+          recentCutoffToggleNable.checked = Boolean(data.enable_recent_device_cutoff_nable);
+          recentCutoffToggleSophos.checked = Boolean(data.enable_recent_device_cutoff_sophos);
+          const nableDays = Number(data.recent_device_cutoff_days_nable || 30);
+          const sophosDays = Number(data.recent_device_cutoff_days_sophos || 30);
+          recentCutoffDaysNable.value = Number.isFinite(nableDays) && nableDays > 0 ? String(nableDays) : "30";
+          recentCutoffDaysSophos.value = Number.isFinite(sophosDays) && sophosDays > 0 ? String(sophosDays) : "30";
+          updateCutoffModeUi();
         } catch (err) {
           msg.textContent = `Failed to load settings: ${err}`;
         }
@@ -289,11 +345,32 @@
       async function saveSettings() {
         saveSettingsBtn.disabled = true;
         try {
+          const globalDays = Number(recentCutoffDaysGlobal.value);
+          const nableDays = Number(recentCutoffDaysNable.value);
+          const sophosDays = Number(recentCutoffDaysSophos.value);
+          if (!Number.isInteger(globalDays) || globalDays < 1 || globalDays > 3650) {
+            msg.textContent = "Global days must be a whole number between 1 and 3650.";
+            return;
+          }
+          if (!Number.isInteger(nableDays) || nableDays < 1 || nableDays > 3650) {
+            msg.textContent = "N-able days must be a whole number between 1 and 3650.";
+            return;
+          }
+          if (!Number.isInteger(sophosDays) || sophosDays < 1 || sophosDays > 3650) {
+            msg.textContent = "Sophos days must be a whole number between 1 and 3650.";
+            return;
+          }
           const res = await fetch("/api/settings", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              enable_recent_device_cutoff: recentCutoffToggle.checked,
+              use_global_device_cutoff: useGlobalCutoff.checked,
+              enable_recent_device_cutoff: recentCutoffToggleGlobal.checked,
+              recent_device_cutoff_days: globalDays,
+              enable_recent_device_cutoff_nable: recentCutoffToggleNable.checked,
+              enable_recent_device_cutoff_sophos: recentCutoffToggleSophos.checked,
+              recent_device_cutoff_days_nable: nableDays,
+              recent_device_cutoff_days_sophos: sophosDays,
             }),
           });
           const data = await res.json();
@@ -301,7 +378,11 @@
             msg.textContent = data.error || "Save failed.";
             return;
           }
-          msg.textContent = "Setting saved. Run a sync to apply to cached counts.";
+          if (useGlobalCutoff.checked) {
+            msg.textContent = `Global cutoff saved (${globalDays} days). Run a sync to apply to cached counts.`;
+          } else {
+            msg.textContent = `Provider cutoffs saved (N-able ${nableDays}d, Sophos ${sophosDays}d). Run a sync to apply to cached counts.`;
+          }
         } catch (err) {
           msg.textContent = `Save failed: ${err}`;
         } finally {
@@ -315,6 +396,7 @@
       purgeEmptyBtn.addEventListener("click", purgeEmptyDuplicates);
       resetBtn.addEventListener("click", resetAll);
       saveSettingsBtn.addEventListener("click", saveSettings);
+      useGlobalCutoff.addEventListener("change", updateCutoffModeUi);
 
       (async () => {
         await Promise.all([loadOptions(), loadLinks(), loadSettings()]);

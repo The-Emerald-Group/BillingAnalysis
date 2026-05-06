@@ -33,7 +33,9 @@ SOPHOS_TOKEN_URL = os.environ.get(
 REQUEST_TIMEOUT_SECONDS = int(os.environ.get("REQUEST_TIMEOUT_SECONDS", "30"))
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
 RETRY_DELAY_SECONDS = float(os.environ.get("RETRY_DELAY_SECONDS", "1.5"))
-SOPHOS_RECENTLY_ONLINE_DAYS = int(os.environ.get("SOPHOS_RECENTLY_ONLINE_DAYS", "30"))
+RECENT_DEVICE_CUTOFF_DAYS_DEFAULT = int(
+    os.environ.get("RECENT_DEVICE_CUTOFF_DAYS", os.environ.get("SOPHOS_RECENTLY_ONLINE_DAYS", "30"))
+)
 ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT = (os.environ.get("ENABLE_RECENT_DEVICE_CUTOFF", "true").strip().lower() == "true")
 
 
@@ -111,7 +113,9 @@ def parse_timestamp_utc(raw):
     return None
 
 
-def is_recently_online(last_seen_at: str, days: int = SOPHOS_RECENTLY_ONLINE_DAYS) -> bool:
+def is_recently_online(last_seen_at: str, days: int = None) -> bool:
+    if days is None:
+        days = get_recent_device_cutoff_days()
     seen_dt = parse_iso_utc(last_seen_at)
     if not seen_dt:
         return False
@@ -152,6 +156,40 @@ def set_app_setting(key: str, value: str) -> None:
 def get_app_setting_bool(key: str, default_value: bool = False) -> bool:
     raw = get_app_setting(key, "true" if default_value else "false").strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def get_recent_device_cutoff_days() -> int:
+    raw = get_app_setting("recent_device_cutoff_days", str(RECENT_DEVICE_CUTOFF_DAYS_DEFAULT)).strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = RECENT_DEVICE_CUTOFF_DAYS_DEFAULT
+    return max(1, min(3650, value))
+
+
+def use_global_device_cutoff() -> bool:
+    return get_app_setting_bool("use_global_device_cutoff", True)
+
+
+def get_provider_cutoff_enabled(provider: str) -> bool:
+    if use_global_device_cutoff():
+        return get_app_setting_bool("enable_recent_device_cutoff", ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT)
+    key = f"enable_recent_device_cutoff_{provider}"
+    return get_app_setting_bool(key, get_app_setting_bool("enable_recent_device_cutoff", ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT))
+
+
+def get_provider_cutoff_days(provider: str) -> int:
+    if use_global_device_cutoff():
+        return get_recent_device_cutoff_days()
+    key = f"recent_device_cutoff_days_{provider}"
+    raw = get_app_setting(key, "").strip()
+    if raw:
+        try:
+            value = int(raw)
+            return max(1, min(3650, value))
+        except Exception:
+            pass
+    return get_recent_device_cutoff_days()
 
 
 def singularize_token(token: str) -> str:
@@ -493,6 +531,56 @@ def init_db() -> None:
                 utc_now_iso(),
             ),
         )
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            ("recent_device_cutoff_days", str(RECENT_DEVICE_CUTOFF_DAYS_DEFAULT), utc_now_iso()),
+        )
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (
+                "enable_recent_device_cutoff_nable",
+                "true" if ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT else "false",
+                utc_now_iso(),
+            ),
+        )
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (
+                "enable_recent_device_cutoff_sophos",
+                "true" if ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT else "false",
+                utc_now_iso(),
+            ),
+        )
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            ("recent_device_cutoff_days_nable", str(RECENT_DEVICE_CUTOFF_DAYS_DEFAULT), utc_now_iso()),
+        )
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            ("recent_device_cutoff_days_sophos", str(RECENT_DEVICE_CUTOFF_DAYS_DEFAULT), utc_now_iso()),
+        )
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            ("use_global_device_cutoff", "true", utc_now_iso()),
+        )
         conn.commit()
         conn.close()
 
@@ -648,64 +736,65 @@ def fetch_all_nable_devices(access_token: str) -> List[Dict]:
     return devices
 
 
+def extract_nable_last_seen(device: Dict):
+    key_hints = (
+        "lastseen",
+        "seen",
+        "checkin",
+        "check-in",
+        "online",
+        "active",
+        "heartbeat",
+        "sync",
+        "boot",
+        "timestamp",
+        "time",
+        "date",
+    )
+    candidates = []
+    stack: List[Tuple[object, int]] = [(device, 0)]
+    visited = set()
+    while stack:
+        node, depth = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        node_id = id(node)
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+        for key, value in node.items():
+            key_l = str(key).strip().lower()
+            if any(h in key_l for h in key_hints):
+                parsed = parse_timestamp_utc(value)
+                if parsed:
+                    candidates.append(parsed)
+            if isinstance(value, dict) and depth < 4:
+                stack.append((value, depth + 1))
+    return max(candidates) if candidates else None
+
+
 def fetch_nable_counts() -> Dict[str, Dict]:
     logger.info("Starting N-able count sync base=%s auth_path=%s devices_path=%s", NABLE_API_BASE, NABLE_AUTH_PATH, NABLE_DEVICES_PATH)
     access_token = fetch_nable_access_token()
     devices = fetch_all_nable_devices(access_token)
     merge_mappings = load_merge_mappings()
-    apply_recent_cutoff = get_app_setting_bool("enable_recent_device_cutoff", ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT)
-    cutoff_seconds = SOPHOS_RECENTLY_ONLINE_DAYS * 86400
+    apply_recent_cutoff = get_provider_cutoff_enabled("nable")
+    cutoff_days = get_provider_cutoff_days("nable")
+    cutoff_seconds = cutoff_days * 86400
     cutoff_applied = 0
+    missing_last_seen = 0
 
     counts: Dict[str, Dict] = {}
     for device in devices:
         if apply_recent_cutoff:
-            last_seen_candidates = [
-                device.get("lastSeenAt"),
-                device.get("lastSeen"),
-                device.get("lastCheckIn"),
-                device.get("lastCheckInAt"),
-                device.get("lastOnline"),
-                device.get("lastOnlineAt"),
-                device.get("lastSync"),
-                device.get("lastSyncAt"),
-                device.get("lastActiveAt"),
-                device.get("lastActivityAt"),
-                device.get("lastBoot"),
-                device.get("lastBootAt"),
-                device.get("timeStamp"),
-                device.get("timestamp"),
-            ]
-            for nested_key in ("device", "agent", "system", "computer", "network"):
-                nested = device.get(nested_key)
-                if isinstance(nested, dict):
-                    last_seen_candidates.extend(
-                        [
-                            nested.get("lastSeenAt"),
-                            nested.get("lastSeen"),
-                            nested.get("lastCheckIn"),
-                            nested.get("lastCheckInAt"),
-                            nested.get("lastOnline"),
-                            nested.get("lastOnlineAt"),
-                            nested.get("lastSync"),
-                            nested.get("lastSyncAt"),
-                            nested.get("lastActiveAt"),
-                            nested.get("lastActivityAt"),
-                            nested.get("timeStamp"),
-                            nested.get("timestamp"),
-                        ]
-                    )
-
-            latest_seen = None
-            for candidate in last_seen_candidates:
-                parsed = parse_timestamp_utc(candidate)
-                if parsed and (latest_seen is None or parsed > latest_seen):
-                    latest_seen = parsed
+            latest_seen = extract_nable_last_seen(device)
             if latest_seen is None:
-                cutoff_applied += 1
-                continue
+                # N-able payloads are inconsistent across tenants/endpoints and may omit
+                # a reliable "last seen" field. Keep these devices rather than zeroing
+                # all customer counts when the field is absent.
+                missing_last_seen += 1
             age_seconds = (datetime.now(timezone.utc) - latest_seen).total_seconds()
-            if age_seconds > cutoff_seconds:
+            if latest_seen is not None and age_seconds > cutoff_seconds:
                 cutoff_applied += 1
                 continue
 
@@ -732,10 +821,12 @@ def fetch_nable_counts() -> Dict[str, Dict]:
             counts[normalized]["display_name"] = raw_name
 
     logger.info(
-        "N-able customer count aggregation complete customers=%s recent_cutoff_enabled=%s filtered_devices=%s",
+        "N-able customer count aggregation complete customers=%s recent_cutoff_enabled=%s recent_cutoff_days=%s filtered_devices=%s missing_last_seen=%s",
         len(counts),
         apply_recent_cutoff,
+        cutoff_days,
         cutoff_applied,
+        missing_last_seen,
     )
     return counts
 
@@ -764,10 +855,11 @@ def fetch_sophos_token() -> str:
 
 
 def fetch_sophos_counts() -> Dict[str, Dict]:
-    apply_recent_cutoff = get_app_setting_bool("enable_recent_device_cutoff", ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT)
+    apply_recent_cutoff = get_provider_cutoff_enabled("sophos")
+    cutoff_days = get_provider_cutoff_days("sophos")
     logger.info(
         "Starting Sophos count sync recently_online_days=%s recent_cutoff_enabled=%s",
-        SOPHOS_RECENTLY_ONLINE_DAYS,
+        cutoff_days,
         apply_recent_cutoff,
     )
     token = fetch_sophos_token()
@@ -838,7 +930,7 @@ def fetch_sophos_counts() -> Dict[str, Dict]:
                 endpoint_payload = endpoint_resp.json()
                 items = endpoint_payload.get("items") or []
                 for item in items:
-                    if (not apply_recent_cutoff) or is_recently_online(item.get("lastSeenAt")):
+                    if (not apply_recent_cutoff) or is_recently_online(item.get("lastSeenAt"), cutoff_days):
                         count += 1
                         endpoint_kind = classify_sophos_endpoint_kind(item)
                         if endpoint_kind == "server":
@@ -909,7 +1001,8 @@ def fetch_sophos_tenant_device_entries(token: str, tenant: Dict) -> List[Dict[st
     if not tenant_id:
         return entries
 
-    apply_recent_cutoff = get_app_setting_bool("enable_recent_device_cutoff", ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT)
+    apply_recent_cutoff = get_provider_cutoff_enabled("sophos")
+    cutoff_days = get_provider_cutoff_days("sophos")
     next_key = None
     while True:
         params = {"pageSize": 500, "view": "full"}
@@ -924,7 +1017,7 @@ def fetch_sophos_tenant_device_entries(token: str, tenant: Dict) -> List[Dict[st
         payload = resp.json()
         items = payload.get("items") or []
         for item in items:
-            if apply_recent_cutoff and (not is_recently_online(item.get("lastSeenAt"))):
+            if apply_recent_cutoff and (not is_recently_online(item.get("lastSeenAt"), cutoff_days)):
                 continue
             host = item.get("hostname")
             if isinstance(host, str) and host.strip():
@@ -1987,11 +2080,13 @@ def api_sync_run():
 def api_get_settings():
     return jsonify(
         {
-            "enable_recent_device_cutoff": get_app_setting_bool(
-                "enable_recent_device_cutoff",
-                ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT,
-            ),
-            "recent_device_cutoff_days": SOPHOS_RECENTLY_ONLINE_DAYS,
+            "use_global_device_cutoff": use_global_device_cutoff(),
+            "enable_recent_device_cutoff": get_app_setting_bool("enable_recent_device_cutoff", ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT),
+            "recent_device_cutoff_days": get_recent_device_cutoff_days(),
+            "enable_recent_device_cutoff_nable": get_provider_cutoff_enabled("nable"),
+            "enable_recent_device_cutoff_sophos": get_provider_cutoff_enabled("sophos"),
+            "recent_device_cutoff_days_nable": get_provider_cutoff_days("nable"),
+            "recent_device_cutoff_days_sophos": get_provider_cutoff_days("sophos"),
         }
     )
 
@@ -1999,15 +2094,64 @@ def api_get_settings():
 @app.route("/api/settings", methods=["PUT"])
 def api_update_settings():
     payload = request.get_json(silent=True) or {}
-    if "enable_recent_device_cutoff" not in payload:
-        return jsonify({"error": "enable_recent_device_cutoff is required"}), 400
-    enabled = bool(payload.get("enable_recent_device_cutoff"))
-    set_app_setting("enable_recent_device_cutoff", "true" if enabled else "false")
+
+    # Backward compatible: old single setting payload still supported.
+    legacy_enabled_present = "enable_recent_device_cutoff" in payload
+    legacy_days_present = "recent_device_cutoff_days" in payload
+    nable_enabled_present = "enable_recent_device_cutoff_nable" in payload
+    sophos_enabled_present = "enable_recent_device_cutoff_sophos" in payload
+    nable_days_present = "recent_device_cutoff_days_nable" in payload
+    sophos_days_present = "recent_device_cutoff_days_sophos" in payload
+    use_global_present = "use_global_device_cutoff" in payload
+
+    if not any([legacy_enabled_present, legacy_days_present, nable_enabled_present, sophos_enabled_present, nable_days_present, sophos_days_present, use_global_present]):
+        return jsonify({"error": "No cutoff settings were provided"}), 400
+
+    def _parse_days(field_name: str, default_value: int) -> int:
+        raw = payload.get(field_name, default_value)
+        try:
+            value = int(raw)
+        except Exception:
+            raise ValueError(f"{field_name} must be an integer")
+        if value < 1 or value > 3650:
+            raise ValueError(f"{field_name} must be between 1 and 3650")
+        return value
+
+    try:
+        use_global = bool(payload.get("use_global_device_cutoff", use_global_device_cutoff()))
+        legacy_enabled = bool(payload.get("enable_recent_device_cutoff", get_app_setting_bool("enable_recent_device_cutoff", ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT)))
+        legacy_days = _parse_days("recent_device_cutoff_days", get_recent_device_cutoff_days())
+        nable_enabled = bool(payload.get("enable_recent_device_cutoff_nable", payload.get("enable_recent_device_cutoff", get_provider_cutoff_enabled("nable"))))
+        sophos_enabled = bool(payload.get("enable_recent_device_cutoff_sophos", payload.get("enable_recent_device_cutoff", get_provider_cutoff_enabled("sophos"))))
+        nable_days = _parse_days("recent_device_cutoff_days_nable", payload.get("recent_device_cutoff_days", get_provider_cutoff_days("nable")))
+        sophos_days = _parse_days("recent_device_cutoff_days_sophos", payload.get("recent_device_cutoff_days", get_provider_cutoff_days("sophos")))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    if use_global:
+        # Keep values consistent while in global mode so switching modes is predictable.
+        nable_enabled = legacy_enabled
+        sophos_enabled = legacy_enabled
+        nable_days = legacy_days
+        sophos_days = legacy_days
+
+    set_app_setting("use_global_device_cutoff", "true" if use_global else "false")
+    set_app_setting("enable_recent_device_cutoff", "true" if legacy_enabled else "false")
+    set_app_setting("recent_device_cutoff_days", str(legacy_days))
+    set_app_setting("enable_recent_device_cutoff_nable", "true" if nable_enabled else "false")
+    set_app_setting("enable_recent_device_cutoff_sophos", "true" if sophos_enabled else "false")
+    set_app_setting("recent_device_cutoff_days_nable", str(nable_days))
+    set_app_setting("recent_device_cutoff_days_sophos", str(sophos_days))
     return jsonify(
         {
             "success": True,
-            "enable_recent_device_cutoff": enabled,
-            "recent_device_cutoff_days": SOPHOS_RECENTLY_ONLINE_DAYS,
+            "use_global_device_cutoff": use_global,
+            "enable_recent_device_cutoff": legacy_enabled,
+            "recent_device_cutoff_days": legacy_days,
+            "enable_recent_device_cutoff_nable": nable_enabled,
+            "enable_recent_device_cutoff_sophos": sophos_enabled,
+            "recent_device_cutoff_days_nable": nable_days,
+            "recent_device_cutoff_days_sophos": sophos_days,
         }
     )
 
