@@ -87,6 +87,7 @@
         <div id="cutoffModeHint" class="subtle-note"></div>
         <div class="controls">
           <button id="saveSettingsBtn" class="button" type="button">Save Cutoff Settings</button>
+          <button id="runSyncBtn" class="button" type="button">Run Sync Now</button>
         </div>
       </section>
 
@@ -137,6 +138,7 @@
       const providerCutoffSection = document.getElementById("providerCutoffSection");
       const cutoffModeHint = document.getElementById("cutoffModeHint");
       const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+      const runSyncBtn = document.getElementById("runSyncBtn");
       const msg = document.getElementById("msg");
       const linksBody = document.getElementById("linksBody");
 
@@ -390,12 +392,30 @@
         }
       }
 
+      async function runSyncNow() {
+        runSyncBtn.disabled = true;
+        try {
+          const res = await fetch("/api/sync/run", { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) {
+            msg.textContent = data.error || "Failed to start sync.";
+            return;
+          }
+          msg.textContent = "Manual sync started. Counts will refresh when the run finishes.";
+        } catch (err) {
+          msg.textContent = `Failed to start sync: ${err}`;
+        } finally {
+          runSyncBtn.disabled = false;
+        }
+      }
+
       linkBtn.addEventListener("click", createLink);
       showLinkedToggle.addEventListener("change", loadOptions);
       dedupeBtn.addEventListener("click", dedupe);
       purgeEmptyBtn.addEventListener("click", purgeEmptyDuplicates);
       resetBtn.addEventListener("click", resetAll);
       saveSettingsBtn.addEventListener("click", saveSettings);
+      runSyncBtn.addEventListener("click", runSyncNow);
       useGlobalCutoff.addEventListener("change", updateCutoffModeUi);
 
       (async () => {
