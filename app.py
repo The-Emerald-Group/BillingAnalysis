@@ -751,7 +751,42 @@ def extract_nable_last_seen(device: Dict):
         "time",
         "date",
     )
+    preferred_paths = [
+        ("lastSeenAt",),
+        ("lastSeen",),
+        ("lastCheckIn",),
+        ("lastCheckInAt",),
+        ("lastOnline",),
+        ("lastOnlineAt",),
+        ("lastActiveAt",),
+        ("lastActivityAt",),
+        ("timeStamp",),
+        ("timestamp",),
+        ("device", "lastSeenAt"),
+        ("device", "lastCheckIn"),
+        ("device", "timestamp"),
+        ("agent", "lastSeenAt"),
+        ("agent", "lastCheckIn"),
+        ("agent", "timestamp"),
+        ("system", "lastSeenAt"),
+        ("computer", "lastSeenAt"),
+        ("network", "lastSeenAt"),
+    ]
     candidates = []
+
+    for path in preferred_paths:
+        current = device
+        ok = True
+        for key in path:
+            if not isinstance(current, dict):
+                ok = False
+                break
+            current = current.get(key)
+        if ok:
+            parsed = parse_timestamp_utc(current)
+            if parsed:
+                candidates.append(parsed)
+
     stack: List[Tuple[object, int]] = [(device, 0)]
     visited = set()
     while stack:
@@ -770,6 +805,10 @@ def extract_nable_last_seen(device: Dict):
                     candidates.append(parsed)
             if isinstance(value, dict) and depth < 4:
                 stack.append((value, depth + 1))
+            elif isinstance(value, list) and depth < 4:
+                for item in value:
+                    if isinstance(item, dict):
+                        stack.append((item, depth + 1))
     return max(candidates) if candidates else None
 
 
@@ -793,10 +832,11 @@ def fetch_nable_counts() -> Dict[str, Dict]:
                 # a reliable "last seen" field. Keep these devices rather than zeroing
                 # all customer counts when the field is absent.
                 missing_last_seen += 1
-            age_seconds = (datetime.now(timezone.utc) - latest_seen).total_seconds()
-            if latest_seen is not None and age_seconds > cutoff_seconds:
-                cutoff_applied += 1
-                continue
+            else:
+                age_seconds = (datetime.now(timezone.utc) - latest_seen).total_seconds()
+                if age_seconds > cutoff_seconds:
+                    cutoff_applied += 1
+                    continue
 
         raw_name = extract_nable_customer_name(device)
         normalized = normalize_customer_name(raw_name)

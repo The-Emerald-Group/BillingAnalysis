@@ -14,6 +14,7 @@
       .list { max-height: 360px; overflow:auto; border:1px solid var(--line); border-radius:8px; }
       .row {
         padding:8px 10px; border-bottom:1px solid var(--line-soft); cursor:pointer; font-size: 14px;
+        display:flex; align-items:center; gap:8px;
       }
       .row:last-child { border-bottom:none; }
       .row.selected { background:#10203a; border-left:3px solid #60a5fa; }
@@ -59,6 +60,24 @@
       </div>
 
       <section class="panel" style="margin-top:14px;">
+        <h3 style="margin:0 0 8px;">Create Platform Link</h3>
+        <div class="muted">Pick one N-able and one Sophos customer, then link them into one canonical company.</div>
+        <div class="controls">
+          <label><input id="showLinkedToggle" type="checkbox" /> Show already linked names</label>
+        </div>
+        <div class="controls">
+          <input id="canonicalName" type="text" placeholder="Canonical company name (optional)" />
+          <button id="linkBtn" class="button" type="button">Link Selected</button>
+        </div>
+        <div class="controls">
+          <button id="dedupeBtn" class="button" type="button">Cleanup Duplicate Names</button>
+          <button id="purgeEmptyBtn" class="button" type="button">Purge Empty Duplicate Rows</button>
+          <button id="resetBtn" class="button danger" type="button">Reset Merges + Rebuild Cache</button>
+        </div>
+        <div id="linkMsg" class="msg"></div>
+      </section>
+
+      <section class="panel" style="margin-top:14px;">
         <h3 style="margin:0 0 8px;">Device Cutoff</h3>
         <div class="muted">Choose a simple global cutoff or manage N-able and Sophos separately.</div>
         <div class="controls">
@@ -89,24 +108,7 @@
           <button id="saveSettingsBtn" class="button" type="button">Save Cutoff Settings</button>
           <button id="runSyncBtn" class="button" type="button">Run Sync Now</button>
         </div>
-      </section>
-
-      <section class="panel" style="margin-top:14px;">
-        <h3 style="margin:0 0 8px;">Create Platform Link</h3>
-        <div class="muted">Pick one N-able and one Sophos customer, then link them into one canonical company.</div>
-        <div class="controls">
-          <label><input id="showLinkedToggle" type="checkbox" /> Show already linked names</label>
-        </div>
-        <div class="controls">
-          <input id="canonicalName" type="text" placeholder="Canonical company name (optional)" />
-          <button id="linkBtn" class="button" type="button">Link Selected</button>
-        </div>
-        <div class="controls">
-          <button id="dedupeBtn" class="button" type="button">Cleanup Duplicate Names</button>
-          <button id="purgeEmptyBtn" class="button" type="button">Purge Empty Duplicate Rows</button>
-          <button id="resetBtn" class="button danger" type="button">Reset Merges + Rebuild Cache</button>
-        </div>
-        <div id="msg" class="msg"></div>
+        <div id="cutoffMsg" class="msg"></div>
       </section>
 
       <section class="panel" style="margin-top:14px;">
@@ -139,7 +141,8 @@
       const cutoffModeHint = document.getElementById("cutoffModeHint");
       const saveSettingsBtn = document.getElementById("saveSettingsBtn");
       const runSyncBtn = document.getElementById("runSyncBtn");
-      const msg = document.getElementById("msg");
+      const linkMsg = document.getElementById("linkMsg");
+      const cutoffMsg = document.getElementById("cutoffMsg");
       const linksBody = document.getElementById("linksBody");
 
       function renderSelectableList(target, items, selectedValue, onSelect) {
@@ -151,7 +154,13 @@
         items.forEach((item) => {
           const row = document.createElement("div");
           row.className = "row" + (item === selectedValue ? " selected" : "");
-          row.textContent = item;
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = item === selectedValue;
+          const text = document.createElement("span");
+          text.textContent = item;
+          row.appendChild(checkbox);
+          row.appendChild(text);
           row.addEventListener("click", () => onSelect(item));
           target.appendChild(row);
         });
@@ -159,11 +168,11 @@
 
       function renderLists() {
         renderSelectableList(nableList, state.nable, state.selectedNable, (item) => {
-          state.selectedNable = item;
+          state.selectedNable = state.selectedNable === item ? "" : item;
           renderLists();
         });
         renderSelectableList(sophosList, state.sophos, state.selectedSophos, (item) => {
-          state.selectedSophos = item;
+          state.selectedSophos = state.selectedSophos === item ? "" : item;
           renderLists();
         });
       }
@@ -209,14 +218,14 @@
               const res = await fetch(`/api/platform-links/${linkId}`, { method: "DELETE" });
               const data = await res.json();
               if (!res.ok) {
-                msg.textContent = data.error || "Delete failed.";
+                linkMsg.textContent = data.error || "Delete failed.";
                 btn.disabled = false;
                 return;
               }
-              msg.textContent = "Platform link deleted. Sync started.";
+              linkMsg.textContent = "Platform link deleted. Sync started.";
               await Promise.all([loadOptions(), loadLinks()]);
             } catch (err) {
-              msg.textContent = `Delete failed: ${err}`;
+              linkMsg.textContent = `Delete failed: ${err}`;
             } finally {
               btn.disabled = false;
             }
@@ -226,7 +235,7 @@
 
       async function createLink() {
         if (!state.selectedNable || !state.selectedSophos) {
-          msg.textContent = "Select one N-able and one Sophos customer first.";
+          linkMsg.textContent = "Select one N-able and one Sophos customer first.";
           return;
         }
         linkBtn.disabled = true;
@@ -242,13 +251,13 @@
           });
           const data = await res.json();
           if (!res.ok) {
-            msg.textContent = data.error || "Link failed.";
+            linkMsg.textContent = data.error || "Link failed.";
             return;
           }
-          msg.textContent = "Link saved. Collapse + sync started.";
+          linkMsg.textContent = "Link saved. Collapse + sync started.";
           await Promise.all([loadOptions(), loadLinks()]);
         } catch (err) {
-          msg.textContent = `Link failed: ${err}`;
+          linkMsg.textContent = `Link failed: ${err}`;
         } finally {
           linkBtn.disabled = false;
         }
@@ -260,13 +269,13 @@
           const res = await fetch("/api/maintenance/dedupe-display-names", { method: "POST" });
           const data = await res.json();
           if (!res.ok) {
-            msg.textContent = data.error || "Cleanup failed.";
+            linkMsg.textContent = data.error || "Cleanup failed.";
             return;
           }
-          msg.textContent = `Cleanup complete. Groups: ${data.summary?.groups_processed || 0}, rows removed: ${data.summary?.rows_removed || 0}.`;
+          linkMsg.textContent = `Cleanup complete. Groups: ${data.summary?.groups_processed || 0}, rows removed: ${data.summary?.rows_removed || 0}.`;
           await Promise.all([loadOptions(), loadLinks()]);
         } catch (err) {
-          msg.textContent = `Cleanup failed: ${err}`;
+          linkMsg.textContent = `Cleanup failed: ${err}`;
         } finally {
           dedupeBtn.disabled = false;
         }
@@ -278,13 +287,13 @@
           const res = await fetch("/api/maintenance/purge-empty-duplicates", { method: "POST" });
           const data = await res.json();
           if (!res.ok) {
-            msg.textContent = data.error || "Cleanup failed.";
+            linkMsg.textContent = data.error || "Cleanup failed.";
             return;
           }
-          msg.textContent = `Empty duplicate cleanup complete. Groups: ${data.summary?.groups_processed || 0}, rows removed: ${data.summary?.rows_removed || 0}.`;
+          linkMsg.textContent = `Empty duplicate cleanup complete. Groups: ${data.summary?.groups_processed || 0}, rows removed: ${data.summary?.rows_removed || 0}.`;
           await Promise.all([loadOptions(), loadLinks()]);
         } catch (err) {
-          msg.textContent = `Cleanup failed: ${err}`;
+          linkMsg.textContent = `Cleanup failed: ${err}`;
         } finally {
           purgeEmptyBtn.disabled = false;
         }
@@ -297,15 +306,15 @@
           const res = await fetch("/api/maintenance/reset-merges", { method: "POST" });
           const data = await res.json();
           if (!res.ok) {
-            msg.textContent = data.error || "Reset failed.";
+            linkMsg.textContent = data.error || "Reset failed.";
             return;
           }
-          msg.textContent = "Reset started. Refreshing lists shortly...";
+          linkMsg.textContent = "Reset started. Refreshing lists shortly...";
           setTimeout(async () => {
             await Promise.all([loadOptions(), loadLinks()]);
           }, 5000);
         } catch (err) {
-          msg.textContent = `Reset failed: ${err}`;
+          linkMsg.textContent = `Reset failed: ${err}`;
         } finally {
           resetBtn.disabled = false;
         }
@@ -340,7 +349,7 @@
           recentCutoffDaysSophos.value = Number.isFinite(sophosDays) && sophosDays > 0 ? String(sophosDays) : "30";
           updateCutoffModeUi();
         } catch (err) {
-          msg.textContent = `Failed to load settings: ${err}`;
+          cutoffMsg.textContent = `Failed to load settings: ${err}`;
         }
       }
 
@@ -351,15 +360,15 @@
           const nableDays = Number(recentCutoffDaysNable.value);
           const sophosDays = Number(recentCutoffDaysSophos.value);
           if (!Number.isInteger(globalDays) || globalDays < 1 || globalDays > 3650) {
-            msg.textContent = "Global days must be a whole number between 1 and 3650.";
+            cutoffMsg.textContent = "Global days must be a whole number between 1 and 3650.";
             return;
           }
           if (!Number.isInteger(nableDays) || nableDays < 1 || nableDays > 3650) {
-            msg.textContent = "N-able days must be a whole number between 1 and 3650.";
+            cutoffMsg.textContent = "N-able days must be a whole number between 1 and 3650.";
             return;
           }
           if (!Number.isInteger(sophosDays) || sophosDays < 1 || sophosDays > 3650) {
-            msg.textContent = "Sophos days must be a whole number between 1 and 3650.";
+            cutoffMsg.textContent = "Sophos days must be a whole number between 1 and 3650.";
             return;
           }
           const res = await fetch("/api/settings", {
@@ -377,16 +386,16 @@
           });
           const data = await res.json();
           if (!res.ok) {
-            msg.textContent = data.error || "Save failed.";
+            cutoffMsg.textContent = data.error || "Save failed.";
             return;
           }
           if (useGlobalCutoff.checked) {
-            msg.textContent = `Global cutoff saved (${globalDays} days). Run a sync to apply to cached counts.`;
+            cutoffMsg.textContent = `Global cutoff saved (${globalDays} days). Run a sync to apply to cached counts.`;
           } else {
-            msg.textContent = `Provider cutoffs saved (N-able ${nableDays}d, Sophos ${sophosDays}d). Run a sync to apply to cached counts.`;
+            cutoffMsg.textContent = `Provider cutoffs saved (N-able ${nableDays}d, Sophos ${sophosDays}d). Run a sync to apply to cached counts.`;
           }
         } catch (err) {
-          msg.textContent = `Save failed: ${err}`;
+          cutoffMsg.textContent = `Save failed: ${err}`;
         } finally {
           saveSettingsBtn.disabled = false;
         }
@@ -398,12 +407,12 @@
           const res = await fetch("/api/sync/run", { method: "POST" });
           const data = await res.json();
           if (!res.ok) {
-            msg.textContent = data.error || "Failed to start sync.";
+            cutoffMsg.textContent = data.error || "Failed to start sync.";
             return;
           }
-          msg.textContent = "Manual sync started. Counts will refresh when the run finishes.";
+          cutoffMsg.textContent = "Manual sync started. Counts will refresh when the run finishes.";
         } catch (err) {
-          msg.textContent = `Failed to start sync: ${err}`;
+          cutoffMsg.textContent = `Failed to start sync: ${err}`;
         } finally {
           runSyncBtn.disabled = false;
         }
