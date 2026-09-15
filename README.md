@@ -1,6 +1,6 @@
 # General Billing Portal
 
-A lightweight, self-hosted billing portal that aggregates device counts per customer from N-able and Sophos, caches results in SQLite for fast UI loads, and supports both automatic and manual customer consolidation.
+A lightweight, self-hosted billing portal that aggregates device counts per customer from Ninja and Sophos, caches results in SQLite for fast UI loads, and supports both automatic and manual customer consolidation.
 
 ## Current Feature Set
 
@@ -11,7 +11,7 @@ A lightweight, self-hosted billing portal that aggregates device counts per cust
 - Status model:
   - Green for matched counts or single-platform customers.
   - Yellow only when both platforms exist and counts mismatch.
-  - Explicit "Doesn't have N-able" / "Doesn't have Sophos" messaging on detail view.
+  - Explicit "Doesn't have Ninja" / "Doesn't have Sophos" messaging on detail view.
 - Sidebar controls for search, status filter, and sorting:
   - Name (A-Z / Z-A)
   - Mismatch delta (high/low)
@@ -22,9 +22,9 @@ A lightweight, self-hosted billing portal that aggregates device counts per cust
   - Full merged list of device names from both platforms.
   - Mismatches first, clear "missing from" labels, color-coded rows.
   - Sticky comparison table headers.
-  - Counter chips for missing from Sophos, missing from N-able, and matched.
+  - Counter chips for missing from Sophos, missing from Ninja, and matched.
 - Dedicated `/settings` page for admin operations:
-  - Manual platform linking (N-able + Sophos -> canonical name).
+  - Manual platform linking (Ninja + Sophos -> canonical name).
   - View and delete platform links.
   - Manual merge mappings.
   - Hide already linked/auto-paired names from picker lists by default.
@@ -33,7 +33,9 @@ A lightweight, self-hosted billing portal that aggregates device counts per cust
 ## Quick Start
 
 1. Configure environment values in `docker-compose.yml`:
-   - `NABLE_TOKEN`
+   - `NINJA_CLIENT_ID`
+   - `NINJA_CLIENT_SECRET`
+   - `NINJA_API_BASE` (match your NinjaOne region)
    - `SOPHOS_CLIENT_ID`
    - `SOPHOS_CLIENT_SECRET`
 2. Start the app:
@@ -51,10 +53,12 @@ docker compose up -d --build
 - `PORT` (default `8083`): Web server port.
 - `SYNC_INTERVAL_MINUTES` (default `1440`): Background sync interval.
 - `DB_PATH` (default `/data/billing_cache.db`): SQLite cache location.
-- `NABLE_TOKEN` (required): N-able JWT token.
-- `NABLE_API_BASE` (default `https://ncod153.n-able.com`): N-able API host.
-- `NABLE_AUTH_PATH` (default `/api/auth/authenticate`): N-able authenticate path.
-- `NABLE_DEVICES_PATH` (default `/api/devices`): N-able devices endpoint path.
+- `NINJA_CLIENT_ID` (required): NinjaOne API Client ID from Administration → Apps → API → Client App IDs.
+- `NINJA_CLIENT_SECRET` (required): NinjaOne API Client Secret (shown once when the app is created).
+- `NINJA_API_BASE` (default `https://app.ninjarmm.com`): Regional NinjaOne host (`eu.ninjarmm.com` / `oc.ninjarmm.com` if needed).
+- `NINJA_TOKEN_PATH` (default `/ws/oauth/token`): OAuth token endpoint path.
+- `NINJA_DEVICES_PATH` (default `/v2/devices-detailed`): Devices list endpoint.
+- `NINJA_OAUTH_SCOPE` (default `monitoring`): OAuth scope (Monitoring is enough for read-only counts).
 - `SOPHOS_CLIENT_ID` (required): Sophos API client ID.
 - `SOPHOS_CLIENT_SECRET` (required): Sophos API client secret.
 - `SOPHOS_TOKEN_URL` (default `https://id.sophos.com/api/v2/oauth2/token`): Sophos OAuth token endpoint.
@@ -66,9 +70,9 @@ docker compose up -d --build
 
 ## How Sync Works
 
-1. Fetch N-able devices with the same authenticate-and-fetch flow used by the export tool.
+1. Authenticate to NinjaOne with OAuth client credentials, then fetch devices (`/v2/devices-detailed`).
 2. Fetch Sophos partner tenants and endpoint data.
-3. Keep only Sophos endpoints recently online (`lastSeenAt` cutoff).
+3. Optionally keep only recently online devices using the Settings cutoff toggle(s).
 4. Aggregate counts per source customer and apply normalization + explicit links/merges.
 5. Upsert current counts, keep history snapshots, and record sync run metadata.
 6. If one provider fails, store the successful provider data and mark run as partial.
@@ -85,8 +89,8 @@ docker compose up -d --build
 
 ### Cutoff Modes
 
-- Global mode (default): one cutoff toggle + day value applies to both N-able and Sophos.
-- Provider mode: configure N-able and Sophos cutoff toggle/day values independently.
+- Global mode (default): one cutoff toggle + day value applies to both Ninja and Sophos.
+- Provider mode: configure Ninja and Sophos cutoff toggle/day values independently.
 - Both modes are managed in `/settings` under **Device Cutoff**.
 - `GET /api/merge-mappings`: List manual merge mappings.
 - `POST /api/merge-mappings`: Create manual merge mapping.
@@ -106,17 +110,17 @@ SQLite tables:
 - `customer_count_history`: Historical count snapshots.
 - `sync_runs`: Sync audit trail and error/partial summaries.
 - `merge_mappings`: Manual merge overrides.
-- `platform_links`: Explicit N-able/Sophos canonical links.
+- `platform_links`: Explicit Ninja/Sophos canonical links.
 
 ## Security Notes
 
 - Keep credentials only in environment variables or Docker secrets.
 - Never commit real credentials to source control.
-- Rotate Sophos credentials before expiry and rotate N-able token when required.
+- Rotate Sophos credentials before expiry and rotate NinjaOne client secrets when required.
 
 ## Troubleshooting
 
-- **N-able 404 on auth**: Check `NABLE_API_BASE` and `NABLE_AUTH_PATH` are not duplicating `/api`.
+- **Ninja auth failed**: Confirm `NINJA_CLIENT_ID` / `NINJA_CLIENT_SECRET`, grant type Client Credentials, scope `monitoring`, and the correct regional `NINJA_API_BASE`.
 - **Only one provider updates**: Expected when run is partial; inspect logs for provider-specific errors.
 - **Merge/link not visible immediately**: Use `/settings` and confirm the link exists in "Current Platform Links".
 - **No Sophos devices in compare**: Verify endpoints are recently online (Settings -> Device Cutoff days).

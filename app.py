@@ -18,10 +18,12 @@ DB_PATH = os.environ.get("DB_PATH", os.path.join(APP_DIR, "data", "billing_cache
 SYNC_INTERVAL_MINUTES = int(os.environ.get("SYNC_INTERVAL_MINUTES", "1440"))
 PORT = int(os.environ.get("PORT", "8083"))
 
-NABLE_TOKEN = os.environ.get("NABLE_TOKEN", "")
-NABLE_API_BASE = os.environ.get("NABLE_API_BASE", "https://ncod153.n-able.com")
-NABLE_AUTH_PATH = os.environ.get("NABLE_AUTH_PATH", "/api/auth/authenticate")
-NABLE_DEVICES_PATH = os.environ.get("NABLE_DEVICES_PATH", "/api/devices")
+NINJA_CLIENT_ID = os.environ.get("NINJA_CLIENT_ID", "")
+NINJA_CLIENT_SECRET = os.environ.get("NINJA_CLIENT_SECRET", "")
+NINJA_API_BASE = os.environ.get("NINJA_API_BASE", "https://app.ninjarmm.com")
+NINJA_TOKEN_PATH = os.environ.get("NINJA_TOKEN_PATH", "/ws/oauth/token")
+NINJA_DEVICES_PATH = os.environ.get("NINJA_DEVICES_PATH", "/v2/devices-detailed")
+NINJA_OAUTH_SCOPE = os.environ.get("NINJA_OAUTH_SCOPE", "monitoring")
 
 SOPHOS_CLIENT_ID = os.environ.get("SOPHOS_CLIENT_ID", "")
 SOPHOS_CLIENT_SECRET = os.environ.get("SOPHOS_CLIENT_SECRET", "")
@@ -238,27 +240,27 @@ def load_platform_links() -> List[Dict]:
     with db_lock:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT id, nable_key, sophos_key, canonical_name FROM platform_links ORDER BY id ASC")
+        cur.execute("SELECT id, ninja_key, sophos_key, canonical_name FROM platform_links ORDER BY id ASC")
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
     return rows
 
 
-def apply_platform_links(nable_counts: Dict[str, Dict], sophos_counts: Dict[str, Dict]) -> Tuple[Dict[str, Dict], Dict[str, Dict]]:
+def apply_platform_links(ninja_counts: Dict[str, Dict], sophos_counts: Dict[str, Dict]) -> Tuple[Dict[str, Dict], Dict[str, Dict]]:
     links = load_platform_links()
     if not links:
-        return nable_counts, sophos_counts
+        return ninja_counts, sophos_counts
 
     merge_mappings = load_merge_mappings()
-    nable_result = dict(nable_counts)
+    ninja_result = dict(ninja_counts)
     sophos_result = dict(sophos_counts)
-    consumed_nable = set()
+    consumed_ninja = set()
     consumed_sophos = set()
 
     for link in links:
-        nkey = resolve_merge_key(str(link["nable_key"]), merge_mappings)
+        nkey = resolve_merge_key(str(link["ninja_key"]), merge_mappings)
         skey = resolve_merge_key(str(link["sophos_key"]), merge_mappings)
-        nentry = nable_counts.get(nkey)
+        nentry = ninja_counts.get(nkey)
         sentry = sophos_counts.get(skey)
         if not nentry and not sentry:
             continue
@@ -267,14 +269,14 @@ def apply_platform_links(nable_counts: Dict[str, Dict], sophos_counts: Dict[str,
         canonical_name = (link.get("canonical_name") or "").strip() or (nentry or sentry).get("display_name", joined_key)
 
         if nentry:
-            nable_result[joined_key] = {
+            ninja_result[joined_key] = {
                 "display_name": canonical_name,
                 "count": int(nentry.get("count") or 0),
                 "server_count": int(nentry.get("server_count") or 0),
                 "device_count": int(nentry.get("device_count") or 0),
                 "source_name": nentry.get("source_name") or nentry.get("display_name"),
             }
-            consumed_nable.add(nkey)
+            consumed_ninja.add(nkey)
         if sentry:
             sophos_result[joined_key] = {
                 "display_name": canonical_name,
@@ -285,15 +287,15 @@ def apply_platform_links(nable_counts: Dict[str, Dict], sophos_counts: Dict[str,
             }
             consumed_sophos.add(skey)
 
-    for key in consumed_nable:
-        nable_result.pop(key, None)
+    for key in consumed_ninja:
+        ninja_result.pop(key, None)
     for key in consumed_sophos:
         sophos_result.pop(key, None)
 
-    return nable_result, sophos_result
+    return ninja_result, sophos_result
 
 
-def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key: str, canonical_name: str) -> Dict[str, int]:
+def apply_platform_link_to_cached_data(link_id: int, ninja_key: str, sophos_key: str, canonical_name: str) -> Dict[str, int]:
     summary = {"rows_collapsed": 0}
     joined_key = f"link:{link_id}"
     with db_lock:
@@ -305,9 +307,9 @@ def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key:
             SELECT
                 c.id,
                 c.normalized_key,
-                l.nable_count,
-                l.nable_server_count,
-                l.nable_device_count,
+                l.ninja_count,
+                l.ninja_server_count,
+                l.ninja_device_count,
                 l.sophos_count,
                 l.sophos_server_count,
                 l.sophos_device_count
@@ -315,12 +317,12 @@ def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key:
             LEFT JOIN customer_counts_latest l ON l.customer_id = c.id
             WHERE c.normalized_key IN (?, ?, ?)
             """,
-            (nable_key, sophos_key, joined_key),
+            (ninja_key, sophos_key, joined_key),
         )
         rows = [dict(r) for r in cur.fetchall()]
-        total_nable = sum(int((r.get("nable_count") or 0)) for r in rows)
-        total_nable_server = sum(int((r.get("nable_server_count") or 0)) for r in rows)
-        total_nable_device = sum(int((r.get("nable_device_count") or 0)) for r in rows)
+        total_ninja = sum(int((r.get("ninja_count") or 0)) for r in rows)
+        total_ninja_server = sum(int((r.get("ninja_server_count") or 0)) for r in rows)
+        total_ninja_device = sum(int((r.get("ninja_device_count") or 0)) for r in rows)
         total_sophos = sum(int((r.get("sophos_count") or 0)) for r in rows)
         total_sophos_server = sum(int((r.get("sophos_server_count") or 0)) for r in rows)
         total_sophos_device = sum(int((r.get("sophos_device_count") or 0)) for r in rows)
@@ -328,7 +330,7 @@ def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key:
 
         cur.execute(
             """
-            INSERT INTO customers (display_name, normalized_key, nable_source_name, sophos_source_name)
+            INSERT INTO customers (display_name, normalized_key, ninja_source_name, sophos_source_name)
             VALUES (?, ?, NULL, NULL)
             ON CONFLICT(normalized_key) DO UPDATE SET
                 display_name = excluded.display_name
@@ -343,37 +345,37 @@ def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key:
             INSERT INTO customer_counts_latest
                 (
                     customer_id,
-                    nable_count,
-                    nable_server_count,
-                    nable_device_count,
+                    ninja_count,
+                    ninja_server_count,
+                    ninja_device_count,
                     sophos_count,
                     sophos_server_count,
                     sophos_device_count,
-                    has_nable,
+                    has_ninja,
                     has_sophos,
                     last_synced_at
                 )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(customer_id) DO UPDATE SET
-                nable_count=excluded.nable_count,
-                nable_server_count=excluded.nable_server_count,
-                nable_device_count=excluded.nable_device_count,
+                ninja_count=excluded.ninja_count,
+                ninja_server_count=excluded.ninja_server_count,
+                ninja_device_count=excluded.ninja_device_count,
                 sophos_count=excluded.sophos_count,
                 sophos_server_count=excluded.sophos_server_count,
                 sophos_device_count=excluded.sophos_device_count,
-                has_nable=excluded.has_nable,
+                has_ninja=excluded.has_ninja,
                 has_sophos=excluded.has_sophos,
                 last_synced_at=excluded.last_synced_at
             """,
             (
                 joined_customer_id,
-                total_nable,
-                total_nable_server,
-                total_nable_device,
+                total_ninja,
+                total_ninja_server,
+                total_ninja_device,
                 total_sophos,
                 total_sophos_server,
                 total_sophos_device,
-                1 if total_nable > 0 else 0,
+                1 if total_ninja > 0 else 0,
                 1 if total_sophos > 0 else 0,
                 synced_at,
             ),
@@ -383,9 +385,9 @@ def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key:
             """
             INSERT INTO customer_count_history (
                 customer_id,
-                nable_count,
-                nable_server_count,
-                nable_device_count,
+                ninja_count,
+                ninja_server_count,
+                ninja_device_count,
                 sophos_count,
                 sophos_server_count,
                 sophos_device_count,
@@ -395,9 +397,9 @@ def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key:
             """,
             (
                 joined_customer_id,
-                total_nable,
-                total_nable_server,
-                total_nable_device,
+                total_ninja,
+                total_ninja_server,
+                total_ninja_device,
                 total_sophos,
                 total_sophos_server,
                 total_sophos_device,
@@ -406,7 +408,7 @@ def apply_platform_link_to_cached_data(link_id: int, nable_key: str, sophos_key:
         )
 
         # Remove source rows so UI immediately shows single canonical entry.
-        cur.execute("SELECT id FROM customers WHERE normalized_key IN (?, ?)", (nable_key, sophos_key))
+        cur.execute("SELECT id FROM customers WHERE normalized_key IN (?, ?)", (ninja_key, sophos_key))
         source_ids = [r[0] for r in cur.fetchall()]
         for sid in source_ids:
             if sid == joined_customer_id:
@@ -437,13 +439,51 @@ def ensure_column(cur: sqlite3.Cursor, table_name: str, column_name: str, defini
         cur.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition_sql}")
 
 
+def rename_column_if_needed(cur: sqlite3.Cursor, table_name: str, old_name: str, new_name: str) -> None:
+    cur.execute(f"PRAGMA table_info({table_name})")
+    existing = {str(row[1]) for row in cur.fetchall()}
+    if old_name in existing and new_name not in existing:
+        cur.execute(f"ALTER TABLE {table_name} RENAME COLUMN {old_name} TO {new_name}")
+
+
+def migrate_nable_schema_to_ninja(cur: sqlite3.Cursor) -> None:
+    """Upgrade older N-able schema/setting keys to Ninja names."""
+    rename_column_if_needed(cur, "customers", "nable_source_name", "ninja_source_name")
+    for table in ("customer_counts_latest", "customer_count_history"):
+        rename_column_if_needed(cur, table, "nable_count", "ninja_count")
+        rename_column_if_needed(cur, table, "nable_server_count", "ninja_server_count")
+        rename_column_if_needed(cur, table, "nable_device_count", "ninja_device_count")
+    rename_column_if_needed(cur, "customer_counts_latest", "has_nable", "has_ninja")
+    rename_column_if_needed(cur, "platform_links", "nable_key", "ninja_key")
+
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='app_settings'")
+    if cur.fetchone():
+        key_renames = {
+            "enable_recent_device_cutoff_nable": "enable_recent_device_cutoff_ninja",
+            "recent_device_cutoff_days_nable": "recent_device_cutoff_days_ninja",
+        }
+        for old_key, new_key in key_renames.items():
+            cur.execute("SELECT value, updated_at FROM app_settings WHERE key = ?", (old_key,))
+            row = cur.fetchone()
+            if not row:
+                continue
+            cur.execute("SELECT 1 FROM app_settings WHERE key = ?", (new_key,))
+            if cur.fetchone():
+                cur.execute("DELETE FROM app_settings WHERE key = ?", (old_key,))
+            else:
+                cur.execute(
+                    "UPDATE app_settings SET key = ? WHERE key = ?",
+                    (new_key, old_key),
+                )
+
+
 def ensure_split_count_columns(cur: sqlite3.Cursor) -> None:
-    ensure_column(cur, "customer_counts_latest", "nable_server_count", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(cur, "customer_counts_latest", "nable_device_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cur, "customer_counts_latest", "ninja_server_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cur, "customer_counts_latest", "ninja_device_count", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(cur, "customer_counts_latest", "sophos_server_count", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(cur, "customer_counts_latest", "sophos_device_count", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(cur, "customer_count_history", "nable_server_count", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(cur, "customer_count_history", "nable_device_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cur, "customer_count_history", "ninja_server_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cur, "customer_count_history", "ninja_device_count", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(cur, "customer_count_history", "sophos_server_count", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(cur, "customer_count_history", "sophos_device_count", "INTEGER NOT NULL DEFAULT 0")
 
@@ -459,19 +499,19 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 display_name TEXT NOT NULL,
                 normalized_key TEXT NOT NULL UNIQUE,
-                nable_source_name TEXT,
+                ninja_source_name TEXT,
                 sophos_source_name TEXT
             );
 
             CREATE TABLE IF NOT EXISTS customer_counts_latest (
                 customer_id INTEGER PRIMARY KEY,
-                nable_count INTEGER NOT NULL DEFAULT 0,
-                nable_server_count INTEGER NOT NULL DEFAULT 0,
-                nable_device_count INTEGER NOT NULL DEFAULT 0,
+                ninja_count INTEGER NOT NULL DEFAULT 0,
+                ninja_server_count INTEGER NOT NULL DEFAULT 0,
+                ninja_device_count INTEGER NOT NULL DEFAULT 0,
                 sophos_count INTEGER NOT NULL DEFAULT 0,
                 sophos_server_count INTEGER NOT NULL DEFAULT 0,
                 sophos_device_count INTEGER NOT NULL DEFAULT 0,
-                has_nable INTEGER NOT NULL DEFAULT 0,
+                has_ninja INTEGER NOT NULL DEFAULT 0,
                 has_sophos INTEGER NOT NULL DEFAULT 0,
                 last_synced_at TEXT NOT NULL,
                 FOREIGN KEY(customer_id) REFERENCES customers(id)
@@ -480,9 +520,9 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS customer_count_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 customer_id INTEGER NOT NULL,
-                nable_count INTEGER NOT NULL DEFAULT 0,
-                nable_server_count INTEGER NOT NULL DEFAULT 0,
-                nable_device_count INTEGER NOT NULL DEFAULT 0,
+                ninja_count INTEGER NOT NULL DEFAULT 0,
+                ninja_server_count INTEGER NOT NULL DEFAULT 0,
+                ninja_device_count INTEGER NOT NULL DEFAULT 0,
                 sophos_count INTEGER NOT NULL DEFAULT 0,
                 sophos_server_count INTEGER NOT NULL DEFAULT 0,
                 sophos_device_count INTEGER NOT NULL DEFAULT 0,
@@ -506,7 +546,7 @@ def init_db() -> None:
 
             CREATE TABLE IF NOT EXISTS platform_links (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nable_key TEXT NOT NULL UNIQUE,
+                ninja_key TEXT NOT NULL UNIQUE,
                 sophos_key TEXT NOT NULL UNIQUE,
                 canonical_name TEXT NOT NULL,
                 created_at TEXT NOT NULL
@@ -519,6 +559,7 @@ def init_db() -> None:
             );
             """
         )
+        migrate_nable_schema_to_ninja(cur)
         ensure_split_count_columns(cur)
         cur.execute(
             """
@@ -544,7 +585,7 @@ def init_db() -> None:
             VALUES (?, ?, ?)
             """,
             (
-                "enable_recent_device_cutoff_nable",
+                "enable_recent_device_cutoff_ninja",
                 "true" if ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT else "false",
                 utc_now_iso(),
             ),
@@ -565,7 +606,7 @@ def init_db() -> None:
             INSERT OR IGNORE INTO app_settings (key, value, updated_at)
             VALUES (?, ?, ?)
             """,
-            ("recent_device_cutoff_days_nable", str(RECENT_DEVICE_CUTOFF_DAYS_DEFAULT), utc_now_iso()),
+            ("recent_device_cutoff_days_ninja", str(RECENT_DEVICE_CUTOFF_DAYS_DEFAULT), utc_now_iso()),
         )
         cur.execute(
             """
@@ -606,13 +647,16 @@ def request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
     raise RuntimeError(f"Request failed after retries method={method} url={url}: {last_error}")
 
 
-def extract_nable_customer_name(device: Dict) -> str:
+def extract_ninja_customer_name(device: Dict) -> str:
     candidates = [
-        device.get("customerName"),
-        device.get("customer"),
+        device.get("organizationName"),
         device.get("clientName"),
+        device.get("customerName"),
+        (device.get("organization") or {}).get("name") if isinstance(device.get("organization"), dict) else None,
+        ((device.get("references") or {}).get("organization") or {}).get("name")
+        if isinstance(device.get("references"), dict)
+        else None,
         (device.get("client") or {}).get("name") if isinstance(device.get("client"), dict) else None,
-        (device.get("site") or {}).get("customerName") if isinstance(device.get("site"), dict) else None,
     ]
     for candidate in candidates:
         if isinstance(candidate, str) and candidate.strip():
@@ -620,30 +664,27 @@ def extract_nable_customer_name(device: Dict) -> str:
     return "Unknown Customer"
 
 
-def extract_nable_device_name(device: Dict) -> str:
-    candidates = extract_nable_device_name_candidates(device)
+def extract_ninja_device_name(device: Dict) -> str:
+    candidates = extract_ninja_device_name_candidates(device)
     return candidates[0] if candidates else ""
 
 
-def extract_nable_device_name_candidates(device: Dict) -> List[str]:
+def extract_ninja_device_name_candidates(device: Dict) -> List[str]:
     candidates: List[str] = []
     field_names = (
-        "longName",
-        "name",
-        "deviceName",
-        "hostname",
-        "displayName",
-        "computerName",
-        "dnsName",
-        "netbiosName",
         "systemName",
+        "dnsName",
+        "displayName",
+        "name",
+        "hostname",
+        "netbiosName",
+        "computerName",
+        "deviceName",
         "machineName",
-        "assetName",
-        "agentName",
     )
     nested_objects = (
+        "references",
         "device",
-        "agent",
         "system",
         "network",
         "computer",
@@ -698,79 +739,68 @@ def device_name_skeleton(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (name or "").strip().lower())
 
 
-def fetch_nable_access_token() -> str:
-    if not NABLE_TOKEN:
-        raise RuntimeError("Missing NABLE_TOKEN")
+def fetch_ninja_access_token() -> str:
+    if not NINJA_CLIENT_ID or not NINJA_CLIENT_SECRET:
+        raise RuntimeError("Missing NINJA_CLIENT_ID or NINJA_CLIENT_SECRET")
 
-    auth_url = f"{NABLE_API_BASE.rstrip('/')}{NABLE_AUTH_PATH}"
+    token_url = f"{NINJA_API_BASE.rstrip('/')}{NINJA_TOKEN_PATH}"
     response = request_with_retry(
         "POST",
-        auth_url,
-        headers={"Authorization": f"Bearer {NABLE_TOKEN}", "Accept": "application/json"},
+        token_url,
+        data={
+            "grant_type": "client_credentials",
+            "client_id": NINJA_CLIENT_ID,
+            "client_secret": NINJA_CLIENT_SECRET,
+            "scope": NINJA_OAUTH_SCOPE,
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
     )
     payload = response.json()
-    token = ((payload.get("tokens") or {}).get("access") or {}).get("token")
+    token = payload.get("access_token")
     if not token:
-        raise RuntimeError("N-able authenticate response missing access token")
-    logger.info("N-able auth succeeded.")
+        raise RuntimeError("Ninja authenticate response missing access_token")
+    logger.info("Ninja auth succeeded.")
     return token
 
 
-def fetch_all_nable_devices(access_token: str) -> List[Dict]:
+def fetch_all_ninja_devices(access_token: str) -> List[Dict]:
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
     devices: List[Dict] = []
-    next_url = f"{NABLE_API_BASE.rstrip('/')}{NABLE_DEVICES_PATH}?pageSize=1000"
+    after = None
+    page_size = 1000
 
-    while next_url:
-        response = request_with_retry("GET", next_url, headers=headers)
+    while True:
+        params = {"pageSize": page_size}
+        if after is not None:
+            params["after"] = after
+        response = request_with_retry(
+            "GET",
+            f"{NINJA_API_BASE.rstrip('/')}{NINJA_DEVICES_PATH}",
+            headers=headers,
+            params=params,
+        )
         payload = response.json()
-        devices.extend(extract_devices_from_response(payload))
+        batch = extract_devices_from_response(payload)
+        if not batch:
+            break
+        devices.extend(batch)
+        last_id = batch[-1].get("id")
+        if last_id is None or len(batch) < page_size:
+            break
+        after = last_id
 
-        next_page = ((payload.get("_links") or {}).get("nextPage")) if isinstance(payload, dict) else None
-        if next_page:
-            next_url = f"{NABLE_API_BASE.rstrip('/')}{next_page}"
-        else:
-            next_url = None
-
-    logger.info("N-able device fetch complete total_devices=%s", len(devices))
+    logger.info("Ninja device fetch complete total_devices=%s", len(devices))
     return devices
 
 
-def extract_nable_last_seen(device: Dict):
-    key_hints = (
-        "lastseen",
-        "seen",
-        "checkin",
-        "check-in",
-        "online",
-        "active",
-        "heartbeat",
-        "sync",
-        "boot",
-        "timestamp",
-        "time",
-        "date",
-    )
+def extract_ninja_last_seen(device: Dict):
     preferred_paths = [
+        ("lastContact",),
+        ("lastUpdate",),
         ("lastSeenAt",),
         ("lastSeen",),
-        ("lastCheckIn",),
-        ("lastCheckInAt",),
-        ("lastOnline",),
-        ("lastOnlineAt",),
-        ("lastActiveAt",),
-        ("lastActivityAt",),
-        ("timeStamp",),
-        ("timestamp",),
-        ("device", "lastSeenAt"),
-        ("device", "lastCheckIn"),
-        ("device", "timestamp"),
-        ("agent", "lastSeenAt"),
-        ("agent", "lastCheckIn"),
-        ("agent", "timestamp"),
-        ("system", "lastSeenAt"),
-        ("computer", "lastSeenAt"),
-        ("network", "lastSeenAt"),
+        ("offline",),
+        ("references", "lastContact"),
     ]
     candidates = []
 
@@ -787,38 +817,21 @@ def extract_nable_last_seen(device: Dict):
             if parsed:
                 candidates.append(parsed)
 
-    stack: List[Tuple[object, int]] = [(device, 0)]
-    visited = set()
-    while stack:
-        node, depth = stack.pop()
-        if not isinstance(node, dict):
-            continue
-        node_id = id(node)
-        if node_id in visited:
-            continue
-        visited.add(node_id)
-        for key, value in node.items():
-            key_l = str(key).strip().lower()
-            if any(h in key_l for h in key_hints):
-                parsed = parse_timestamp_utc(value)
-                if parsed:
-                    candidates.append(parsed)
-            if isinstance(value, dict) and depth < 4:
-                stack.append((value, depth + 1))
-            elif isinstance(value, list) and depth < 4:
-                for item in value:
-                    if isinstance(item, dict):
-                        stack.append((item, depth + 1))
     return max(candidates) if candidates else None
 
 
-def fetch_nable_counts() -> Dict[str, Dict]:
-    logger.info("Starting N-able count sync base=%s auth_path=%s devices_path=%s", NABLE_API_BASE, NABLE_AUTH_PATH, NABLE_DEVICES_PATH)
-    access_token = fetch_nable_access_token()
-    devices = fetch_all_nable_devices(access_token)
+def fetch_ninja_counts() -> Dict[str, Dict]:
+    logger.info(
+        "Starting Ninja count sync base=%s token_path=%s devices_path=%s",
+        NINJA_API_BASE,
+        NINJA_TOKEN_PATH,
+        NINJA_DEVICES_PATH,
+    )
+    access_token = fetch_ninja_access_token()
+    devices = fetch_all_ninja_devices(access_token)
     merge_mappings = load_merge_mappings()
-    apply_recent_cutoff = get_provider_cutoff_enabled("nable")
-    cutoff_days = get_provider_cutoff_days("nable")
+    apply_recent_cutoff = get_provider_cutoff_enabled("ninja")
+    cutoff_days = get_provider_cutoff_days("ninja")
     cutoff_seconds = cutoff_days * 86400
     cutoff_applied = 0
     missing_last_seen = 0
@@ -826,11 +839,9 @@ def fetch_nable_counts() -> Dict[str, Dict]:
     counts: Dict[str, Dict] = {}
     for device in devices:
         if apply_recent_cutoff:
-            latest_seen = extract_nable_last_seen(device)
+            latest_seen = extract_ninja_last_seen(device)
             if latest_seen is None:
-                # N-able payloads are inconsistent across tenants/endpoints and may omit
-                # a reliable "last seen" field. Keep these devices rather than zeroing
-                # all customer counts when the field is absent.
+                # Keep devices with unknown last-contact rather than dropping them.
                 missing_last_seen += 1
             else:
                 age_seconds = (datetime.now(timezone.utc) - latest_seen).total_seconds()
@@ -838,12 +849,12 @@ def fetch_nable_counts() -> Dict[str, Dict]:
                     cutoff_applied += 1
                     continue
 
-        raw_name = extract_nable_customer_name(device)
+        raw_name = extract_ninja_customer_name(device)
         normalized = normalize_customer_name(raw_name)
         normalized = resolve_merge_key(normalized, merge_mappings)
         if not normalized:
             continue
-        kind = classify_nable_device_kind(device)
+        kind = classify_ninja_device_kind(device)
         if normalized not in counts:
             counts[normalized] = {
                 "display_name": raw_name,
@@ -861,7 +872,7 @@ def fetch_nable_counts() -> Dict[str, Dict]:
             counts[normalized]["display_name"] = raw_name
 
     logger.info(
-        "N-able customer count aggregation complete customers=%s recent_cutoff_enabled=%s recent_cutoff_days=%s filtered_devices=%s missing_last_seen=%s",
+        "Ninja customer count aggregation complete customers=%s recent_cutoff_enabled=%s recent_cutoff_days=%s filtered_devices=%s missing_last_seen=%s",
         len(counts),
         apply_recent_cutoff,
         cutoff_days,
@@ -1090,8 +1101,26 @@ def classify_asset_kind(value: str) -> str:
     return "device"
 
 
-def classify_nable_device_kind(device: Dict) -> str:
+def classify_ninja_device_kind(device: Dict) -> str:
+    node_class = str(device.get("nodeClass") or "").strip().upper()
+    if node_class:
+        server_classes = {
+            "WINDOWS_SERVER",
+            "LINUX_SERVER",
+            "MAC_SERVER",
+            "VMWARE_VM_HOST",
+            "HYPERV_VMM_HOST",
+            "NMS_SERVER",
+            "NMS_VM_HOST",
+        }
+        if node_class in server_classes or node_class.endswith("_SERVER") or "SERVER" in node_class:
+            # Avoid classifying workstation-like classes as servers.
+            if "WORKSTATION" not in node_class:
+                return "server"
+        return "device"
+
     fields_to_probe = [
+        "nodeClass",
         "deviceClass",
         "deviceType",
         "type",
@@ -1102,7 +1131,7 @@ def classify_nable_device_kind(device: Dict) -> str:
         "operatingSystem",
         "platform",
         "description",
-        "longName",
+        "systemName",
         "name",
     ]
     for field in fields_to_probe:
@@ -1110,15 +1139,11 @@ def classify_nable_device_kind(device: Dict) -> str:
         if isinstance(value, str) and value.strip():
             if classify_asset_kind(value) == "server":
                 return "server"
-    for nested_key in ("device", "agent", "system", "computer", "network"):
-        nested = device.get(nested_key)
-        if not isinstance(nested, dict):
-            continue
-        for field in fields_to_probe:
-            value = nested.get(field)
-            if isinstance(value, str) and value.strip():
-                if classify_asset_kind(value) == "server":
-                    return "server"
+    role = device.get("role")
+    if isinstance(role, dict):
+        role_name = role.get("name") or role.get("nodeClass")
+        if isinstance(role_name, str) and classify_asset_kind(role_name) == "server":
+            return "server"
     return "device"
 
 
@@ -1148,8 +1173,8 @@ def merge_kind(existing_kind: str, incoming_kind: str) -> str:
     return "device"
 
 
-def choose_category_for_row(nable_kind: str, sophos_kind: str) -> str:
-    n_kind = nable_kind or "device"
+def choose_category_for_row(ninja_kind: str, sophos_kind: str) -> str:
+    n_kind = ninja_kind or "device"
     s_kind = sophos_kind or "device"
     if n_kind and s_kind and n_kind != s_kind:
         return "mixed"
@@ -1162,7 +1187,7 @@ def get_customer_by_id(customer_id: int):
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT c.id, c.display_name, c.normalized_key, c.nable_source_name, c.sophos_source_name
+            SELECT c.id, c.display_name, c.normalized_key, c.ninja_source_name, c.sophos_source_name
             FROM customers c
             WHERE c.id = ?
             """,
@@ -1189,52 +1214,52 @@ def write_sync_run(started_at: str, finished_at: str, status: str, error_summary
 
 
 def upsert_counts(
-    nable_counts: Dict[str, Dict],
+    ninja_counts: Dict[str, Dict],
     sophos_counts: Dict[str, Dict],
     synced_at: str,
     prune_missing: bool = False,
 ) -> None:
-    all_keys = sorted(set(nable_counts.keys()) | set(sophos_counts.keys()))
+    all_keys = sorted(set(ninja_counts.keys()) | set(sophos_counts.keys()))
     with db_lock:
         conn = get_conn()
         cur = conn.cursor()
         touched_customer_ids = set()
 
         for key in all_keys:
-            nable_entry = nable_counts.get(key)
+            ninja_entry = ninja_counts.get(key)
             sophos_entry = sophos_counts.get(key)
 
             display_name = None
-            if nable_entry and sophos_entry:
-                display_name = nable_entry["display_name"] if len(nable_entry["display_name"]) >= len(sophos_entry["display_name"]) else sophos_entry["display_name"]
-            elif nable_entry:
-                display_name = nable_entry["display_name"]
+            if ninja_entry and sophos_entry:
+                display_name = ninja_entry["display_name"] if len(ninja_entry["display_name"]) >= len(sophos_entry["display_name"]) else sophos_entry["display_name"]
+            elif ninja_entry:
+                display_name = ninja_entry["display_name"]
             elif sophos_entry:
                 display_name = sophos_entry["display_name"]
             else:
                 display_name = key
 
-            nable_source_name = (nable_entry.get("source_name") or nable_entry.get("display_name")) if nable_entry else None
+            ninja_source_name = (ninja_entry.get("source_name") or ninja_entry.get("display_name")) if ninja_entry else None
             sophos_source_name = (sophos_entry.get("source_name") or sophos_entry.get("display_name")) if sophos_entry else None
-            nable_count = int(nable_entry["count"]) if nable_entry else 0
-            nable_server_count = int(nable_entry.get("server_count") or 0) if nable_entry else 0
-            nable_device_count = int(nable_entry.get("device_count") or 0) if nable_entry else 0
+            ninja_count = int(ninja_entry["count"]) if ninja_entry else 0
+            ninja_server_count = int(ninja_entry.get("server_count") or 0) if ninja_entry else 0
+            ninja_device_count = int(ninja_entry.get("device_count") or 0) if ninja_entry else 0
             sophos_count = int(sophos_entry["count"]) if sophos_entry else 0
             sophos_server_count = int(sophos_entry.get("server_count") or 0) if sophos_entry else 0
             sophos_device_count = int(sophos_entry.get("device_count") or 0) if sophos_entry else 0
-            has_nable = 1 if nable_count > 0 else 0
+            has_ninja = 1 if ninja_count > 0 else 0
             has_sophos = 1 if sophos_count > 0 else 0
 
             cur.execute(
                 """
-                INSERT INTO customers (display_name, normalized_key, nable_source_name, sophos_source_name)
+                INSERT INTO customers (display_name, normalized_key, ninja_source_name, sophos_source_name)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(normalized_key) DO UPDATE SET
                     display_name=excluded.display_name,
-                    nable_source_name=excluded.nable_source_name,
+                    ninja_source_name=excluded.ninja_source_name,
                     sophos_source_name=excluded.sophos_source_name
                 """,
-                (display_name, key, nable_source_name, sophos_source_name),
+                (display_name, key, ninja_source_name, sophos_source_name),
             )
             cur.execute("SELECT id FROM customers WHERE normalized_key = ?", (key,))
             customer_id = cur.fetchone()[0]
@@ -1244,37 +1269,37 @@ def upsert_counts(
                 INSERT INTO customer_counts_latest
                     (
                         customer_id,
-                        nable_count,
-                        nable_server_count,
-                        nable_device_count,
+                        ninja_count,
+                        ninja_server_count,
+                        ninja_device_count,
                         sophos_count,
                         sophos_server_count,
                         sophos_device_count,
-                        has_nable,
+                        has_ninja,
                         has_sophos,
                         last_synced_at
                     )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(customer_id) DO UPDATE SET
-                    nable_count=excluded.nable_count,
-                    nable_server_count=excluded.nable_server_count,
-                    nable_device_count=excluded.nable_device_count,
+                    ninja_count=excluded.ninja_count,
+                    ninja_server_count=excluded.ninja_server_count,
+                    ninja_device_count=excluded.ninja_device_count,
                     sophos_count=excluded.sophos_count,
                     sophos_server_count=excluded.sophos_server_count,
                     sophos_device_count=excluded.sophos_device_count,
-                    has_nable=excluded.has_nable,
+                    has_ninja=excluded.has_ninja,
                     has_sophos=excluded.has_sophos,
                     last_synced_at=excluded.last_synced_at
                 """,
                 (
                     customer_id,
-                    nable_count,
-                    nable_server_count,
-                    nable_device_count,
+                    ninja_count,
+                    ninja_server_count,
+                    ninja_device_count,
                     sophos_count,
                     sophos_server_count,
                     sophos_device_count,
-                    has_nable,
+                    has_ninja,
                     has_sophos,
                     synced_at,
                 ),
@@ -1283,9 +1308,9 @@ def upsert_counts(
                 """
                 INSERT INTO customer_count_history (
                     customer_id,
-                    nable_count,
-                    nable_server_count,
-                    nable_device_count,
+                    ninja_count,
+                    ninja_server_count,
+                    ninja_device_count,
                     sophos_count,
                     sophos_server_count,
                     sophos_device_count,
@@ -1295,9 +1320,9 @@ def upsert_counts(
                 """,
                 (
                     customer_id,
-                    nable_count,
-                    nable_server_count,
-                    nable_device_count,
+                    ninja_count,
+                    ninja_server_count,
+                    ninja_device_count,
                     sophos_count,
                     sophos_server_count,
                     sophos_device_count,
@@ -1313,13 +1338,13 @@ def upsert_counts(
                 cur.execute(
                     """
                     UPDATE customer_counts_latest
-                    SET nable_count = 0,
-                        nable_server_count = 0,
-                        nable_device_count = 0,
+                    SET ninja_count = 0,
+                        ninja_server_count = 0,
+                        ninja_device_count = 0,
                         sophos_count = 0,
                         sophos_server_count = 0,
                         sophos_device_count = 0,
-                        has_nable = 0,
+                        has_ninja = 0,
                         has_sophos = 0,
                         last_synced_at = ?
                     WHERE customer_id = ?
@@ -1330,9 +1355,9 @@ def upsert_counts(
                     """
                     INSERT INTO customer_count_history (
                         customer_id,
-                        nable_count,
-                        nable_server_count,
-                        nable_device_count,
+                        ninja_count,
+                        ninja_server_count,
+                        ninja_device_count,
                         sophos_count,
                         sophos_server_count,
                         sophos_device_count,
@@ -1356,9 +1381,9 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
         conn = get_conn()
         cur = conn.cursor()
 
-        cur.execute("SELECT id, display_name, nable_source_name, sophos_source_name FROM customers WHERE normalized_key = ?", (from_key,))
+        cur.execute("SELECT id, display_name, ninja_source_name, sophos_source_name FROM customers WHERE normalized_key = ?", (from_key,))
         from_customer = cur.fetchone()
-        cur.execute("SELECT id, display_name, nable_source_name, sophos_source_name FROM customers WHERE normalized_key = ?", (to_key,))
+        cur.execute("SELECT id, display_name, ninja_source_name, sophos_source_name FROM customers WHERE normalized_key = ?", (to_key,))
         to_customer = cur.fetchone()
 
         if not from_customer:
@@ -1368,29 +1393,29 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
         if not to_customer:
             cur.execute(
                 """
-                INSERT INTO customers (display_name, normalized_key, nable_source_name, sophos_source_name)
+                INSERT INTO customers (display_name, normalized_key, ninja_source_name, sophos_source_name)
                 VALUES (?, ?, ?, ?)
                 """,
                 (
                     from_customer["display_name"],
                     to_key,
-                    from_customer["nable_source_name"],
+                    from_customer["ninja_source_name"],
                     from_customer["sophos_source_name"],
                 ),
             )
-            cur.execute("SELECT id, display_name, nable_source_name, sophos_source_name FROM customers WHERE normalized_key = ?", (to_key,))
+            cur.execute("SELECT id, display_name, ninja_source_name, sophos_source_name FROM customers WHERE normalized_key = ?", (to_key,))
             to_customer = cur.fetchone()
 
         cur.execute(
             """
             SELECT
-                nable_count,
-                nable_server_count,
-                nable_device_count,
+                ninja_count,
+                ninja_server_count,
+                ninja_device_count,
                 sophos_count,
                 sophos_server_count,
                 sophos_device_count,
-                has_nable,
+                has_ninja,
                 has_sophos,
                 last_synced_at
             FROM customer_counts_latest
@@ -1402,13 +1427,13 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
         cur.execute(
             """
             SELECT
-                nable_count,
-                nable_server_count,
-                nable_device_count,
+                ninja_count,
+                ninja_server_count,
+                ninja_device_count,
                 sophos_count,
                 sophos_server_count,
                 sophos_device_count,
-                has_nable,
+                has_ninja,
                 has_sophos,
                 last_synced_at
             FROM customer_counts_latest
@@ -1418,21 +1443,21 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
         )
         to_latest = cur.fetchone()
 
-        from_nable = int((from_latest["nable_count"] if from_latest else 0) or 0)
-        from_nable_server = int((from_latest["nable_server_count"] if from_latest else 0) or 0)
-        from_nable_device = int((from_latest["nable_device_count"] if from_latest else 0) or 0)
+        from_ninja = int((from_latest["ninja_count"] if from_latest else 0) or 0)
+        from_ninja_server = int((from_latest["ninja_server_count"] if from_latest else 0) or 0)
+        from_ninja_device = int((from_latest["ninja_device_count"] if from_latest else 0) or 0)
         from_sophos = int((from_latest["sophos_count"] if from_latest else 0) or 0)
         from_sophos_server = int((from_latest["sophos_server_count"] if from_latest else 0) or 0)
         from_sophos_device = int((from_latest["sophos_device_count"] if from_latest else 0) or 0)
-        to_nable = int((to_latest["nable_count"] if to_latest else 0) or 0)
-        to_nable_server = int((to_latest["nable_server_count"] if to_latest else 0) or 0)
-        to_nable_device = int((to_latest["nable_device_count"] if to_latest else 0) or 0)
+        to_ninja = int((to_latest["ninja_count"] if to_latest else 0) or 0)
+        to_ninja_server = int((to_latest["ninja_server_count"] if to_latest else 0) or 0)
+        to_ninja_device = int((to_latest["ninja_device_count"] if to_latest else 0) or 0)
         to_sophos = int((to_latest["sophos_count"] if to_latest else 0) or 0)
         to_sophos_server = int((to_latest["sophos_server_count"] if to_latest else 0) or 0)
         to_sophos_device = int((to_latest["sophos_device_count"] if to_latest else 0) or 0)
-        merged_nable = from_nable + to_nable
-        merged_nable_server = from_nable_server + to_nable_server
-        merged_nable_device = from_nable_device + to_nable_device
+        merged_ninja = from_ninja + to_ninja
+        merged_ninja_server = from_ninja_server + to_ninja_server
+        merged_ninja_device = from_ninja_device + to_ninja_device
         merged_sophos = from_sophos + to_sophos
         merged_sophos_server = from_sophos_server + to_sophos_server
         merged_sophos_device = from_sophos_device + to_sophos_device
@@ -1443,37 +1468,37 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
             INSERT INTO customer_counts_latest
                 (
                     customer_id,
-                    nable_count,
-                    nable_server_count,
-                    nable_device_count,
+                    ninja_count,
+                    ninja_server_count,
+                    ninja_device_count,
                     sophos_count,
                     sophos_server_count,
                     sophos_device_count,
-                    has_nable,
+                    has_ninja,
                     has_sophos,
                     last_synced_at
                 )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(customer_id) DO UPDATE SET
-                nable_count=excluded.nable_count,
-                nable_server_count=excluded.nable_server_count,
-                nable_device_count=excluded.nable_device_count,
+                ninja_count=excluded.ninja_count,
+                ninja_server_count=excluded.ninja_server_count,
+                ninja_device_count=excluded.ninja_device_count,
                 sophos_count=excluded.sophos_count,
                 sophos_server_count=excluded.sophos_server_count,
                 sophos_device_count=excluded.sophos_device_count,
-                has_nable=excluded.has_nable,
+                has_ninja=excluded.has_ninja,
                 has_sophos=excluded.has_sophos,
                 last_synced_at=excluded.last_synced_at
             """,
             (
                 to_customer["id"],
-                merged_nable,
-                merged_nable_server,
-                merged_nable_device,
+                merged_ninja,
+                merged_ninja_server,
+                merged_ninja_device,
                 merged_sophos,
                 merged_sophos_server,
                 merged_sophos_device,
-                1 if merged_nable > 0 else 0,
+                1 if merged_ninja > 0 else 0,
                 1 if merged_sophos > 0 else 0,
                 merged_synced,
             ),
@@ -1482,9 +1507,9 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
             """
             INSERT INTO customer_count_history (
                 customer_id,
-                nable_count,
-                nable_server_count,
-                nable_device_count,
+                ninja_count,
+                ninja_server_count,
+                ninja_device_count,
                 sophos_count,
                 sophos_server_count,
                 sophos_device_count,
@@ -1494,9 +1519,9 @@ def apply_merge_to_cached_data(from_key: str, to_key: str) -> Dict[str, int]:
             """,
             (
                 to_customer["id"],
-                merged_nable,
-                merged_nable_server,
-                merged_nable_device,
+                merged_ninja,
+                merged_ninja_server,
+                merged_ninja_device,
                 merged_sophos,
                 merged_sophos_server,
                 merged_sophos_device,
@@ -1525,11 +1550,11 @@ def dedupe_customers_by_display_name() -> Dict[str, int]:
                 c.id,
                 c.display_name,
                 c.normalized_key,
-                c.nable_source_name,
+                c.ninja_source_name,
                 c.sophos_source_name,
-                l.nable_count,
-                l.nable_server_count,
-                l.nable_device_count,
+                l.ninja_count,
+                l.ninja_server_count,
+                l.ninja_device_count,
                 l.sophos_count
                 ,
                 l.sophos_server_count,
@@ -1551,13 +1576,13 @@ def dedupe_customers_by_display_name() -> Dict[str, int]:
             result["groups_processed"] += 1
             members_sorted = sorted(
                 members,
-                key=lambda m: (-(int(m.get("nable_count") or 0) + int(m.get("sophos_count") or 0)), m["id"]),
+                key=lambda m: (-(int(m.get("ninja_count") or 0) + int(m.get("sophos_count") or 0)), m["id"]),
             )
             primary = members_sorted[0]
             others = members_sorted[1:]
-            total_nable = sum(int(m.get("nable_count") or 0) for m in members_sorted)
-            total_nable_server = sum(int(m.get("nable_server_count") or 0) for m in members_sorted)
-            total_nable_device = sum(int(m.get("nable_device_count") or 0) for m in members_sorted)
+            total_ninja = sum(int(m.get("ninja_count") or 0) for m in members_sorted)
+            total_ninja_server = sum(int(m.get("ninja_server_count") or 0) for m in members_sorted)
+            total_ninja_device = sum(int(m.get("ninja_device_count") or 0) for m in members_sorted)
             total_sophos = sum(int(m.get("sophos_count") or 0) for m in members_sorted)
             total_sophos_server = sum(int(m.get("sophos_server_count") or 0) for m in members_sorted)
             total_sophos_device = sum(int(m.get("sophos_device_count") or 0) for m in members_sorted)
@@ -1565,25 +1590,25 @@ def dedupe_customers_by_display_name() -> Dict[str, int]:
             cur.execute(
                 """
                 UPDATE customer_counts_latest
-                SET nable_count = ?,
-                    nable_server_count = ?,
-                    nable_device_count = ?,
+                SET ninja_count = ?,
+                    ninja_server_count = ?,
+                    ninja_device_count = ?,
                     sophos_count = ?,
                     sophos_server_count = ?,
                     sophos_device_count = ?,
-                    has_nable = ?,
+                    has_ninja = ?,
                     has_sophos = ?,
                     last_synced_at = ?
                 WHERE customer_id = ?
                 """,
                 (
-                    total_nable,
-                    total_nable_server,
-                    total_nable_device,
+                    total_ninja,
+                    total_ninja_server,
+                    total_ninja_device,
                     total_sophos,
                     total_sophos_server,
                     total_sophos_device,
-                    1 if total_nable > 0 else 0,
+                    1 if total_ninja > 0 else 0,
                     1 if total_sophos > 0 else 0,
                     utc_now_iso(),
                     primary["id"],
@@ -1610,7 +1635,7 @@ def purge_empty_duplicate_customer_rows() -> Dict[str, int]:
             SELECT
                 c.id,
                 c.display_name,
-                l.nable_count,
+                l.ninja_count,
                 l.sophos_count
             FROM customers c
             INNER JOIN customer_counts_latest l ON l.customer_id = c.id
@@ -1627,11 +1652,11 @@ def purge_empty_duplicate_customer_rows() -> Dict[str, int]:
         for members in groups.values():
             if len(members) <= 1:
                 continue
-            active_rows = [m for m in members if int(m.get("nable_count") or 0) > 0 or int(m.get("sophos_count") or 0) > 0]
+            active_rows = [m for m in members if int(m.get("ninja_count") or 0) > 0 or int(m.get("sophos_count") or 0) > 0]
             if not active_rows:
                 continue
             result["groups_processed"] += 1
-            stale_rows = [m for m in members if int(m.get("nable_count") or 0) == 0 and int(m.get("sophos_count") or 0) == 0]
+            stale_rows = [m for m in members if int(m.get("ninja_count") or 0) == 0 and int(m.get("sophos_count") or 0) == 0]
             for stale in stale_rows:
                 cur.execute("DELETE FROM customer_counts_latest WHERE customer_id = ?", (stale["id"],))
                 cur.execute("DELETE FROM customer_count_history WHERE customer_id = ?", (stale["id"],))
@@ -1669,15 +1694,15 @@ def run_sync(trigger: str = "scheduled") -> Tuple[bool, str, Dict]:
     logger.info("Sync started trigger=%s", trigger)
 
     try:
-        nable_counts: Dict[str, Dict] = {}
+        ninja_counts: Dict[str, Dict] = {}
         sophos_counts: Dict[str, Dict] = {}
         provider_errors: Dict[str, str] = {}
 
         try:
-            nable_counts = fetch_nable_counts()
+            ninja_counts = fetch_ninja_counts()
         except Exception as exc:
-            provider_errors["nable"] = str(exc)
-            logger.exception("N-able sync failed: %s", exc)
+            provider_errors["ninja"] = str(exc)
+            logger.exception("Ninja sync failed: %s", exc)
 
         try:
             sophos_counts = fetch_sophos_counts()
@@ -1685,16 +1710,16 @@ def run_sync(trigger: str = "scheduled") -> Tuple[bool, str, Dict]:
             provider_errors["sophos"] = str(exc)
             logger.exception("Sophos sync failed: %s", exc)
 
-        nable_counts, sophos_counts = apply_platform_links(nable_counts, sophos_counts)
+        ninja_counts, sophos_counts = apply_platform_links(ninja_counts, sophos_counts)
 
-        if not nable_counts and not sophos_counts:
+        if not ninja_counts and not sophos_counts:
             combined = "Both provider syncs failed."
             if provider_errors:
                 combined += " " + " | ".join([f"{k}: {v}" for k, v in provider_errors.items()])
             raise RuntimeError(combined)
 
         synced_at = utc_now_iso()
-        upsert_counts(nable_counts, sophos_counts, synced_at, prune_missing=(len(provider_errors) == 0))
+        upsert_counts(ninja_counts, sophos_counts, synced_at, prune_missing=(len(provider_errors) == 0))
         runtime_state["last_sync_finished_at"] = synced_at
         if provider_errors:
             runtime_state["last_sync_status"] = "partial"
@@ -1780,27 +1805,27 @@ def api_customers():
             SELECT
                 c.id,
                 c.display_name,
-                c.nable_source_name,
+                c.ninja_source_name,
                 c.sophos_source_name,
-                l.nable_count,
-                l.nable_server_count,
-                l.nable_device_count,
+                l.ninja_count,
+                l.ninja_server_count,
+                l.ninja_device_count,
                 l.sophos_count,
                 l.sophos_server_count,
                 l.sophos_device_count,
-                l.has_nable,
+                l.has_ninja,
                 l.has_sophos,
                 l.last_synced_at,
                 CASE
-                    WHEN l.has_nable = 1 AND l.has_sophos = 1 AND l.nable_count <> l.sophos_count THEN 'mismatch'
+                    WHEN l.has_ninja = 1 AND l.has_sophos = 1 AND l.ninja_count <> l.sophos_count THEN 'mismatch'
                     ELSE 'match'
                 END AS count_status,
-                ABS(l.nable_count - l.sophos_count) AS count_delta,
-                ROUND((l.nable_count + l.sophos_count) / 2.0, 1) AS average_total
+                ABS(l.ninja_count - l.sophos_count) AS count_delta,
+                ROUND((l.ninja_count + l.sophos_count) / 2.0, 1) AS average_total
             FROM customers c
             INNER JOIN customer_counts_latest l ON l.customer_id = c.id
             WHERE c.normalized_key NOT IN (
-                SELECT nable_key FROM platform_links
+                SELECT ninja_key FROM platform_links
                 UNION
                 SELECT sophos_key FROM platform_links
             )
@@ -1829,9 +1854,9 @@ def api_customers():
     elif sort_by == "mismatch_asc":
         rows.sort(key=lambda r: (int(r.get("count_delta") or 0), (r.get("display_name") or "").lower()))
     elif sort_by == "total_desc":
-        rows.sort(key=lambda r: (int(r.get("nable_count") or 0) + int(r.get("sophos_count") or 0), (r.get("display_name") or "").lower()), reverse=True)
+        rows.sort(key=lambda r: (int(r.get("ninja_count") or 0) + int(r.get("sophos_count") or 0), (r.get("display_name") or "").lower()), reverse=True)
     elif sort_by == "total_asc":
-        rows.sort(key=lambda r: (int(r.get("nable_count") or 0) + int(r.get("sophos_count") or 0), (r.get("display_name") or "").lower()))
+        rows.sort(key=lambda r: (int(r.get("ninja_count") or 0) + int(r.get("sophos_count") or 0), (r.get("display_name") or "").lower()))
     elif sort_by == "avg_desc":
         rows.sort(key=lambda r: (float(r.get("average_total") or 0), (r.get("display_name") or "").lower()), reverse=True)
     elif sort_by == "avg_asc":
@@ -1864,28 +1889,28 @@ def api_customer(customer_id: int):
             SELECT
                 c.id,
                 c.display_name,
-                c.nable_source_name,
+                c.ninja_source_name,
                 c.sophos_source_name,
-                l.nable_count,
-                l.nable_server_count,
-                l.nable_device_count,
+                l.ninja_count,
+                l.ninja_server_count,
+                l.ninja_device_count,
                 l.sophos_count,
                 l.sophos_server_count,
                 l.sophos_device_count,
-                l.has_nable,
+                l.has_ninja,
                 l.has_sophos,
                 l.last_synced_at,
                 CASE
-                    WHEN l.has_nable = 1 AND l.has_sophos = 1 AND l.nable_count <> l.sophos_count THEN 'mismatch'
+                    WHEN l.has_ninja = 1 AND l.has_sophos = 1 AND l.ninja_count <> l.sophos_count THEN 'mismatch'
                     ELSE 'match'
                 END AS count_status,
-                ABS(l.nable_count - l.sophos_count) AS count_delta,
-                ROUND((l.nable_count + l.sophos_count) / 2.0, 1) AS average_total
+                ABS(l.ninja_count - l.sophos_count) AS count_delta,
+                ROUND((l.ninja_count + l.sophos_count) / 2.0, 1) AS average_total
             FROM customers c
             INNER JOIN customer_counts_latest l ON l.customer_id = c.id
             WHERE c.id = ?
               AND c.normalized_key NOT IN (
-                  SELECT nable_key FROM platform_links
+                  SELECT ninja_key FROM platform_links
                   UNION
                   SELECT sophos_key FROM platform_links
               )
@@ -1908,32 +1933,32 @@ def api_customer_device_compare(customer_id: int):
 
     normalized_target = customer["normalized_key"]
     mappings = load_merge_mappings()
-    nable_entries: List[Dict[str, str]] = []
+    ninja_entries: List[Dict[str, str]] = []
     sophos_entries: List[Dict[str, str]] = []
     warnings: List[str] = []
-    nable_source_name = (customer.get("nable_source_name") or "").strip().lower()
+    ninja_source_name = (customer.get("ninja_source_name") or "").strip().lower()
     sophos_source_name = (customer.get("sophos_source_name") or "").strip().lower()
 
-    # N-able side
+    # Ninja side
     try:
-        nable_token = fetch_nable_access_token()
-        nable_devices = fetch_all_nable_devices(nable_token)
-        for dev in nable_devices:
-            cname = extract_nable_customer_name(dev)
+        ninja_token = fetch_ninja_access_token()
+        ninja_devices = fetch_all_ninja_devices(ninja_token)
+        for dev in ninja_devices:
+            cname = extract_ninja_customer_name(dev)
             ckey = resolve_merge_key(normalize_customer_name(cname), mappings)
             cname_l = (cname or "").strip().lower()
             # Use both normalized key matching and exact source-name fallback.
-            if ckey != normalized_target and (not nable_source_name or cname_l != nable_source_name):
+            if ckey != normalized_target and (not ninja_source_name or cname_l != ninja_source_name):
                 continue
-            kind = classify_nable_device_kind(dev)
-            aliases = extract_nable_device_name_candidates(dev)
+            kind = classify_ninja_device_kind(dev)
+            aliases = extract_ninja_device_name_candidates(dev)
             if aliases:
                 for alias in aliases:
-                    nable_entries.append({"name": alias, "kind": kind})
+                    ninja_entries.append({"name": alias, "kind": kind})
     except Exception as exc:
-        warn = f"N-able compare fetch failed: {exc}"
+        warn = f"Ninja compare fetch failed: {exc}"
         warnings.append(warn)
-        logger.warning("Device compare N-able fetch failed customer_id=%s error=%s", customer_id, exc)
+        logger.warning("Device compare Ninja fetch failed customer_id=%s error=%s", customer_id, exc)
 
     # Sophos side
     try:
@@ -1964,15 +1989,15 @@ def api_customer_device_compare(customer_id: int):
         warnings.append(warn)
         logger.warning("Device compare Sophos fetch failed customer_id=%s error=%s", customer_id, exc)
 
-    nable_by_norm: Dict[str, str] = {}
-    nable_kind_by_norm: Dict[str, str] = {}
-    for entry in nable_entries:
+    ninja_by_norm: Dict[str, str] = {}
+    ninja_kind_by_norm: Dict[str, str] = {}
+    for entry in ninja_entries:
         normalized_name = normalize_device_name(str(entry.get("name") or ""))
         if not normalized_name:
             continue
-        nable_by_norm[normalized_name] = str(entry.get("name") or "")
-        nable_kind_by_norm[normalized_name] = merge_kind(
-            nable_kind_by_norm.get(normalized_name, "device"),
+        ninja_by_norm[normalized_name] = str(entry.get("name") or "")
+        ninja_kind_by_norm[normalized_name] = merge_kind(
+            ninja_kind_by_norm.get(normalized_name, "device"),
             str(entry.get("kind") or "device"),
         )
 
@@ -1987,28 +2012,28 @@ def api_customer_device_compare(customer_id: int):
             sophos_kind_by_norm.get(normalized_name, "device"),
             str(entry.get("kind") or "device"),
         )
-    nable_set = set(nable_by_norm.keys())
+    ninja_set = set(ninja_by_norm.keys())
     sophos_set = set(sophos_by_norm.keys())
 
-    nable_skeleton_to_name: Dict[str, str] = {}
-    for value in nable_by_norm.values():
+    ninja_skeleton_to_name: Dict[str, str] = {}
+    for value in ninja_by_norm.values():
         sk = device_name_skeleton(value)
-        if sk and sk not in nable_skeleton_to_name:
-            nable_skeleton_to_name[sk] = value
+        if sk and sk not in ninja_skeleton_to_name:
+            ninja_skeleton_to_name[sk] = value
     sophos_skeleton_to_name: Dict[str, str] = {}
     for value in sophos_by_norm.values():
         sk = device_name_skeleton(value)
         if sk and sk not in sophos_skeleton_to_name:
             sophos_skeleton_to_name[sk] = value
 
-    missing_from_nable = sorted([sophos_by_norm[k] for k in (sophos_set - nable_set)])
-    missing_from_sophos = sorted([nable_by_norm[k] for k in (nable_set - sophos_set)])
-    all_keys = sorted(nable_set | sophos_set)
+    missing_from_ninja = sorted([sophos_by_norm[k] for k in (sophos_set - ninja_set)])
+    missing_from_sophos = sorted([ninja_by_norm[k] for k in (ninja_set - sophos_set)])
+    all_keys = sorted(ninja_set | sophos_set)
     comparison_rows = []
     for key in all_keys:
-        n_name = nable_by_norm.get(key)
+        n_name = ninja_by_norm.get(key)
         s_name = sophos_by_norm.get(key)
-        n_kind = nable_kind_by_norm.get(key)
+        n_kind = ninja_kind_by_norm.get(key)
         s_kind = sophos_kind_by_norm.get(key)
         category_key = choose_category_for_row(n_kind, s_kind)
         near_match = None
@@ -2025,12 +2050,12 @@ def api_customer_device_compare(customer_id: int):
             skeleton = device_name_skeleton(n_name)
             near_match = sophos_skeleton_to_name.get(skeleton) if skeleton else None
         else:
-            status = "missing_from_nable"
-            label = "Missing from N-able"
+            status = "missing_from_ninja"
+            label = "Missing from Ninja"
             sort_rank = 0
             display = s_name
             skeleton = device_name_skeleton(s_name)
-            near_match = nable_skeleton_to_name.get(skeleton) if skeleton else None
+            near_match = ninja_skeleton_to_name.get(skeleton) if skeleton else None
 
         comparison_rows.append(
             {
@@ -2038,10 +2063,10 @@ def api_customer_device_compare(customer_id: int):
                 "label": label,
                 "device_key": key,
                 "display_name": display,
-                "nable_name": n_name,
+                "ninja_name": n_name,
                 "sophos_name": s_name,
                 "category_key": category_key,
-                "nable_kind": n_kind or "device",
+                "ninja_kind": n_kind or "device",
                 "sophos_kind": s_kind or "device",
                 "near_match_hint": near_match,
                 "sort_rank": sort_rank,
@@ -2054,15 +2079,15 @@ def api_customer_device_compare(customer_id: int):
         {
             "customer_id": customer_id,
             "customer_name": customer["display_name"],
-            "nable_total_names": len(nable_by_norm),
+            "ninja_total_names": len(ninja_by_norm),
             "sophos_total_names": len(sophos_by_norm),
-            "matched_names": len(nable_set & sophos_set),
-            "missing_from_nable": missing_from_nable,
+            "matched_names": len(ninja_set & sophos_set),
+            "missing_from_ninja": missing_from_ninja,
             "missing_from_sophos": missing_from_sophos,
             "totals_by_kind": {
-                "nable": {
-                    "server": len([k for k in nable_set if nable_kind_by_norm.get(k) == "server"]),
-                    "device": len([k for k in nable_set if nable_kind_by_norm.get(k) != "server"]),
+                "ninja": {
+                    "server": len([k for k in ninja_set if ninja_kind_by_norm.get(k) == "server"]),
+                    "device": len([k for k in ninja_set if ninja_kind_by_norm.get(k) != "server"]),
                 },
                 "sophos": {
                     "server": len([k for k in sophos_set if sophos_kind_by_norm.get(k) == "server"]),
@@ -2072,15 +2097,15 @@ def api_customer_device_compare(customer_id: int):
                     "server": len(
                         [
                             k
-                            for k in (nable_set & sophos_set)
-                            if choose_category_for_row(nable_kind_by_norm.get(k), sophos_kind_by_norm.get(k)) == "server"
+                            for k in (ninja_set & sophos_set)
+                            if choose_category_for_row(ninja_kind_by_norm.get(k), sophos_kind_by_norm.get(k)) == "server"
                         ]
                     ),
                     "device": len(
                         [
                             k
-                            for k in (nable_set & sophos_set)
-                            if choose_category_for_row(nable_kind_by_norm.get(k), sophos_kind_by_norm.get(k)) != "server"
+                            for k in (ninja_set & sophos_set)
+                            if choose_category_for_row(ninja_kind_by_norm.get(k), sophos_kind_by_norm.get(k)) != "server"
                         ]
                     ),
                 },
@@ -2123,9 +2148,9 @@ def api_get_settings():
             "use_global_device_cutoff": use_global_device_cutoff(),
             "enable_recent_device_cutoff": get_app_setting_bool("enable_recent_device_cutoff", ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT),
             "recent_device_cutoff_days": get_recent_device_cutoff_days(),
-            "enable_recent_device_cutoff_nable": get_provider_cutoff_enabled("nable"),
+            "enable_recent_device_cutoff_ninja": get_provider_cutoff_enabled("ninja"),
             "enable_recent_device_cutoff_sophos": get_provider_cutoff_enabled("sophos"),
-            "recent_device_cutoff_days_nable": get_provider_cutoff_days("nable"),
+            "recent_device_cutoff_days_ninja": get_provider_cutoff_days("ninja"),
             "recent_device_cutoff_days_sophos": get_provider_cutoff_days("sophos"),
         }
     )
@@ -2138,13 +2163,13 @@ def api_update_settings():
     # Backward compatible: old single setting payload still supported.
     legacy_enabled_present = "enable_recent_device_cutoff" in payload
     legacy_days_present = "recent_device_cutoff_days" in payload
-    nable_enabled_present = "enable_recent_device_cutoff_nable" in payload
+    ninja_enabled_present = "enable_recent_device_cutoff_ninja" in payload
     sophos_enabled_present = "enable_recent_device_cutoff_sophos" in payload
-    nable_days_present = "recent_device_cutoff_days_nable" in payload
+    ninja_days_present = "recent_device_cutoff_days_ninja" in payload
     sophos_days_present = "recent_device_cutoff_days_sophos" in payload
     use_global_present = "use_global_device_cutoff" in payload
 
-    if not any([legacy_enabled_present, legacy_days_present, nable_enabled_present, sophos_enabled_present, nable_days_present, sophos_days_present, use_global_present]):
+    if not any([legacy_enabled_present, legacy_days_present, ninja_enabled_present, sophos_enabled_present, ninja_days_present, sophos_days_present, use_global_present]):
         return jsonify({"error": "No cutoff settings were provided"}), 400
 
     def _parse_days(field_name: str, default_value: int) -> int:
@@ -2161,26 +2186,26 @@ def api_update_settings():
         use_global = bool(payload.get("use_global_device_cutoff", use_global_device_cutoff()))
         legacy_enabled = bool(payload.get("enable_recent_device_cutoff", get_app_setting_bool("enable_recent_device_cutoff", ENABLE_RECENT_DEVICE_CUTOFF_DEFAULT)))
         legacy_days = _parse_days("recent_device_cutoff_days", get_recent_device_cutoff_days())
-        nable_enabled = bool(payload.get("enable_recent_device_cutoff_nable", payload.get("enable_recent_device_cutoff", get_provider_cutoff_enabled("nable"))))
+        ninja_enabled = bool(payload.get("enable_recent_device_cutoff_ninja", payload.get("enable_recent_device_cutoff", get_provider_cutoff_enabled("ninja"))))
         sophos_enabled = bool(payload.get("enable_recent_device_cutoff_sophos", payload.get("enable_recent_device_cutoff", get_provider_cutoff_enabled("sophos"))))
-        nable_days = _parse_days("recent_device_cutoff_days_nable", payload.get("recent_device_cutoff_days", get_provider_cutoff_days("nable")))
+        ninja_days = _parse_days("recent_device_cutoff_days_ninja", payload.get("recent_device_cutoff_days", get_provider_cutoff_days("ninja")))
         sophos_days = _parse_days("recent_device_cutoff_days_sophos", payload.get("recent_device_cutoff_days", get_provider_cutoff_days("sophos")))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
     if use_global:
         # Keep values consistent while in global mode so switching modes is predictable.
-        nable_enabled = legacy_enabled
+        ninja_enabled = legacy_enabled
         sophos_enabled = legacy_enabled
-        nable_days = legacy_days
+        ninja_days = legacy_days
         sophos_days = legacy_days
 
     set_app_setting("use_global_device_cutoff", "true" if use_global else "false")
     set_app_setting("enable_recent_device_cutoff", "true" if legacy_enabled else "false")
     set_app_setting("recent_device_cutoff_days", str(legacy_days))
-    set_app_setting("enable_recent_device_cutoff_nable", "true" if nable_enabled else "false")
+    set_app_setting("enable_recent_device_cutoff_ninja", "true" if ninja_enabled else "false")
     set_app_setting("enable_recent_device_cutoff_sophos", "true" if sophos_enabled else "false")
-    set_app_setting("recent_device_cutoff_days_nable", str(nable_days))
+    set_app_setting("recent_device_cutoff_days_ninja", str(ninja_days))
     set_app_setting("recent_device_cutoff_days_sophos", str(sophos_days))
     return jsonify(
         {
@@ -2188,9 +2213,9 @@ def api_update_settings():
             "use_global_device_cutoff": use_global,
             "enable_recent_device_cutoff": legacy_enabled,
             "recent_device_cutoff_days": legacy_days,
-            "enable_recent_device_cutoff_nable": nable_enabled,
+            "enable_recent_device_cutoff_ninja": ninja_enabled,
             "enable_recent_device_cutoff_sophos": sophos_enabled,
-            "recent_device_cutoff_days_nable": nable_days,
+            "recent_device_cutoff_days_ninja": ninja_days,
             "recent_device_cutoff_days_sophos": sophos_days,
         }
     )
@@ -2210,7 +2235,7 @@ def api_platform_options():
     links = load_platform_links()
     linked_keys = set()
     for link in links:
-        linked_keys.add(resolve_merge_key(str(link.get("nable_key") or ""), merge_mappings))
+        linked_keys.add(resolve_merge_key(str(link.get("ninja_key") or ""), merge_mappings))
         linked_keys.add(resolve_merge_key(str(link.get("sophos_key") or ""), merge_mappings))
     auto_paired_keys = set()
 
@@ -2219,30 +2244,30 @@ def api_platform_options():
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT normalized_key, nable_source_name, sophos_source_name
+            SELECT normalized_key, ninja_source_name, sophos_source_name
             FROM customers
-            WHERE nable_source_name IS NOT NULL
-              AND TRIM(nable_source_name) <> ''
+            WHERE ninja_source_name IS NOT NULL
+              AND TRIM(ninja_source_name) <> ''
               AND sophos_source_name IS NOT NULL
               AND TRIM(sophos_source_name) <> ''
             """
         )
         rows = [dict(r) for r in cur.fetchall()]
         for row in rows:
-            nkey = resolve_merge_key(normalize_customer_name(str(row.get("nable_source_name") or "")), merge_mappings)
+            nkey = resolve_merge_key(normalize_customer_name(str(row.get("ninja_source_name") or "")), merge_mappings)
             skey = resolve_merge_key(normalize_customer_name(str(row.get("sophos_source_name") or "")), merge_mappings)
             if nkey and skey and nkey == skey:
                 auto_paired_keys.add(resolve_merge_key(str(row.get("normalized_key") or ""), merge_mappings))
 
         cur.execute(
             """
-            SELECT DISTINCT nable_source_name
+            SELECT DISTINCT ninja_source_name
             FROM customers
-            WHERE nable_source_name IS NOT NULL AND TRIM(nable_source_name) <> ''
-            ORDER BY nable_source_name COLLATE NOCASE ASC
+            WHERE ninja_source_name IS NOT NULL AND TRIM(ninja_source_name) <> ''
+            ORDER BY ninja_source_name COLLATE NOCASE ASC
             """
         )
-        nable_all = [r[0] for r in cur.fetchall()]
+        ninja_all = [r[0] for r in cur.fetchall()]
         cur.execute(
             """
             SELECT DISTINCT sophos_source_name
@@ -2255,11 +2280,11 @@ def api_platform_options():
         conn.close()
 
     if include_linked:
-        nable = nable_all
+        ninja = ninja_all
         sophos = sophos_all
     else:
-        nable = [
-            n for n in nable_all
+        ninja = [
+            n for n in ninja_all
             if resolve_merge_key(normalize_customer_name(str(n)), merge_mappings) not in linked_keys
             and resolve_merge_key(normalize_customer_name(str(n)), merge_mappings) not in auto_paired_keys
         ]
@@ -2269,7 +2294,7 @@ def api_platform_options():
             and resolve_merge_key(normalize_customer_name(str(s)), merge_mappings) not in auto_paired_keys
         ]
 
-    return jsonify({"nable": nable, "sophos": sophos, "include_linked": include_linked})
+    return jsonify({"ninja": ninja, "sophos": sophos, "include_linked": include_linked})
 
 
 @app.route("/api/platform-links", methods=["GET"])
@@ -2281,37 +2306,37 @@ def api_platform_links():
 @app.route("/api/platform-links", methods=["POST"])
 def api_create_platform_link():
     payload = request.get_json(silent=True) or {}
-    nable_name = str(payload.get("nable_name") or "").strip()
+    ninja_name = str(payload.get("ninja_name") or "").strip()
     sophos_name = str(payload.get("sophos_name") or "").strip()
     canonical_name = str(payload.get("canonical_name") or "").strip()
-    if not nable_name or not sophos_name:
-        return jsonify({"error": "nable_name and sophos_name are required"}), 400
+    if not ninja_name or not sophos_name:
+        return jsonify({"error": "ninja_name and sophos_name are required"}), 400
 
     merge_mappings = load_merge_mappings()
-    nable_key = resolve_merge_key(normalize_customer_name(nable_name), merge_mappings)
+    ninja_key = resolve_merge_key(normalize_customer_name(ninja_name), merge_mappings)
     sophos_key = resolve_merge_key(normalize_customer_name(sophos_name), merge_mappings)
-    if not nable_key or not sophos_key:
-        return jsonify({"error": "Unable to normalize one or both platform names"}), 400
+    if not ninja_key or not sophos_key:
+        return jsonify({"error": "Uninja to normalize one or both platform names"}), 400
     if not canonical_name:
-        canonical_name = nable_name if len(nable_name) >= len(sophos_name) else sophos_name
+        canonical_name = ninja_name if len(ninja_name) >= len(sophos_name) else sophos_name
 
     with db_lock:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("DELETE FROM platform_links WHERE nable_key = ? OR sophos_key = ?", (nable_key, sophos_key))
+        cur.execute("DELETE FROM platform_links WHERE ninja_key = ? OR sophos_key = ?", (ninja_key, sophos_key))
         cur.execute(
             """
-            INSERT INTO platform_links (nable_key, sophos_key, canonical_name, created_at)
+            INSERT INTO platform_links (ninja_key, sophos_key, canonical_name, created_at)
             VALUES (?, ?, ?, ?)
             """,
-            (nable_key, sophos_key, canonical_name, utc_now_iso()),
+            (ninja_key, sophos_key, canonical_name, utc_now_iso()),
         )
-        cur.execute("SELECT id FROM platform_links WHERE nable_key = ?", (nable_key,))
+        cur.execute("SELECT id FROM platform_links WHERE ninja_key = ?", (ninja_key,))
         link_id = cur.fetchone()[0]
         conn.commit()
         conn.close()
 
-    collapse_summary = apply_platform_link_to_cached_data(link_id, nable_key, sophos_key, canonical_name)
+    collapse_summary = apply_platform_link_to_cached_data(link_id, ninja_key, sophos_key, canonical_name)
     trigger_sync_async("platform-link")
     return jsonify(
         {
@@ -2375,7 +2400,7 @@ def api_create_merge_mapping():
         to_key = normalize_customer_name(to_name)
 
     if not from_key or not to_key:
-        return jsonify({"error": "Unable to resolve one or both customer keys"}), 400
+        return jsonify({"error": "Uninja to resolve one or both customer keys"}), 400
     if from_key == to_key:
         return jsonify({"error": "Source and target already resolve to the same customer"}), 400
 

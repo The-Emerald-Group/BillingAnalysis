@@ -50,8 +50,8 @@
 
       <div class="grid">
         <section class="panel">
-          <h3 style="margin:0 0 8px;">N-able Customers</h3>
-          <div id="nableList" class="list"></div>
+          <h3 style="margin:0 0 8px;">Ninja Customers</h3>
+          <div id="ninjaList" class="list"></div>
         </section>
         <section class="panel">
           <h3 style="margin:0 0 8px;">Sophos Customers</h3>
@@ -61,7 +61,7 @@
 
       <section class="panel" style="margin-top:14px;">
         <h3 style="margin:0 0 8px;">Create Platform Link</h3>
-        <div class="muted">Pick one N-able and one Sophos customer, then link them into one canonical company.</div>
+        <div class="muted">Pick one Ninja and one Sophos customer, then link them into one canonical company.</div>
         <div class="controls">
           <label><input id="showLinkedToggle" type="checkbox" /> Show already linked names</label>
         </div>
@@ -79,7 +79,7 @@
 
       <section class="panel" style="margin-top:14px;">
         <h3 style="margin:0 0 8px;">Device Cutoff</h3>
-        <div class="muted">Choose a simple global cutoff or manage N-able and Sophos separately.</div>
+        <div class="muted">Choose a simple global cutoff or manage Ninja and Sophos separately.</div>
         <div class="controls">
           <label><input id="useGlobalCutoff" type="checkbox" /> Use one cutoff for both providers (recommended)</label>
         </div>
@@ -91,10 +91,10 @@
         </div>
         <div id="providerCutoffSection">
         <div class="controls">
-          <span class="section-title">N-able</span>
-          <label><input id="recentCutoffToggleNable" type="checkbox" /> N-able cutoff</label>
-          <label for="recentCutoffDaysNable">N-able days</label>
-          <input id="recentCutoffDaysNable" type="number" min="1" max="3650" step="1" value="30" style="min-width:120px;" />
+          <span class="section-title">Ninja</span>
+          <label><input id="recentCutoffToggleNinja" type="checkbox" /> Ninja cutoff</label>
+          <label for="recentCutoffDaysNinja">Ninja days</label>
+          <input id="recentCutoffDaysNinja" type="number" min="1" max="3650" step="1" value="30" style="min-width:120px;" />
         </div>
         <div class="controls">
           <span class="section-title">Sophos</span>
@@ -114,15 +114,15 @@
       <section class="panel" style="margin-top:14px;">
         <h3 style="margin:0 0 8px;">Current Platform Links</h3>
         <table class="table">
-          <thead><tr><th>ID</th><th>N-able Key</th><th>Sophos Key</th><th>Canonical</th><th>Action</th></tr></thead>
+          <thead><tr><th>ID</th><th>Ninja Key</th><th>Sophos Key</th><th>Canonical</th><th>Action</th></tr></thead>
           <tbody id="linksBody"></tbody>
         </table>
       </section>
     </div>
 
     <script>
-      const state = { nable: [], sophos: [], selectedNable: "", selectedSophos: "" };
-      const nableList = document.getElementById("nableList");
+      const state = { ninja: [], sophos: [], selectedNinja: "", selectedSophos: "" };
+      const ninjaList = document.getElementById("ninjaList");
       const sophosList = document.getElementById("sophosList");
       const canonicalName = document.getElementById("canonicalName");
       const linkBtn = document.getElementById("linkBtn");
@@ -133,8 +133,8 @@
       const useGlobalCutoff = document.getElementById("useGlobalCutoff");
       const recentCutoffToggleGlobal = document.getElementById("recentCutoffToggleGlobal");
       const recentCutoffDaysGlobal = document.getElementById("recentCutoffDaysGlobal");
-      const recentCutoffToggleNable = document.getElementById("recentCutoffToggleNable");
-      const recentCutoffDaysNable = document.getElementById("recentCutoffDaysNable");
+      const recentCutoffToggleNinja = document.getElementById("recentCutoffToggleNinja");
+      const recentCutoffDaysNinja = document.getElementById("recentCutoffDaysNinja");
       const recentCutoffToggleSophos = document.getElementById("recentCutoffToggleSophos");
       const recentCutoffDaysSophos = document.getElementById("recentCutoffDaysSophos");
       const providerCutoffSection = document.getElementById("providerCutoffSection");
@@ -167,8 +167,8 @@
       }
 
       function renderLists() {
-        renderSelectableList(nableList, state.nable, state.selectedNable, (item) => {
-          state.selectedNable = state.selectedNable === item ? "" : item;
+        renderSelectableList(ninjaList, state.ninja, state.selectedNinja, (item) => {
+          state.selectedNinja = state.selectedNinja === item ? "" : item;
           renderLists();
         });
         renderSelectableList(sophosList, state.sophos, state.selectedSophos, (item) => {
@@ -182,9 +182,9 @@
         const res = await fetch(`/api/platform-options?include_linked=${includeLinked}`);
         if (!res.ok) return;
         const data = await res.json();
-        state.nable = data.nable || [];
+        state.ninja = data.ninja || [];
         state.sophos = data.sophos || [];
-        if (!state.nable.includes(state.selectedNable)) state.selectedNable = "";
+        if (!state.ninja.includes(state.selectedNinja)) state.selectedNinja = "";
         if (!state.sophos.includes(state.selectedSophos)) state.selectedSophos = "";
         renderLists();
       }
@@ -197,7 +197,7 @@
         linksBody.innerHTML = rows.map((r) => (
           `<tr>
              <td>${r.id}</td>
-             <td>${r.nable_key}</td>
+             <td>${r.ninja_key}</td>
              <td>${r.sophos_key}</td>
              <td>${r.canonical_name}</td>
              <td><button class="link-delete" data-link-id="${r.id}" type="button">Delete</button></td>
@@ -234,8 +234,8 @@
       }
 
       async function createLink() {
-        if (!state.selectedNable || !state.selectedSophos) {
-          linkMsg.textContent = "Select one N-able and one Sophos customer first.";
+        if (!state.selectedNinja || !state.selectedSophos) {
+          linkMsg.textContent = "Select one Ninja and one Sophos customer first.";
           return;
         }
         linkBtn.disabled = true;
@@ -244,7 +244,7 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              nable_name: state.selectedNable,
+              ninja_name: state.selectedNinja,
               sophos_name: state.selectedSophos,
               canonical_name: canonicalName.value.trim(),
             }),
@@ -323,13 +323,13 @@
       function updateCutoffModeUi() {
         const globalMode = useGlobalCutoff.checked;
         providerCutoffSection.classList.toggle("disabled-section", globalMode);
-        recentCutoffToggleNable.disabled = globalMode;
-        recentCutoffDaysNable.disabled = globalMode;
+        recentCutoffToggleNinja.disabled = globalMode;
+        recentCutoffDaysNinja.disabled = globalMode;
         recentCutoffToggleSophos.disabled = globalMode;
         recentCutoffDaysSophos.disabled = globalMode;
         cutoffModeHint.textContent = globalMode
-          ? "Global mode is ON: one toggle and day value applies to both N-able and Sophos."
-          : "Global mode is OFF: N-able and Sophos use separate toggle/day values.";
+          ? "Global mode is ON: one toggle and day value applies to both Ninja and Sophos."
+          : "Global mode is OFF: Ninja and Sophos use separate toggle/day values.";
       }
 
       async function loadSettings() {
@@ -341,11 +341,11 @@
           recentCutoffToggleGlobal.checked = Boolean(data.enable_recent_device_cutoff);
           const globalDays = Number(data.recent_device_cutoff_days || 30);
           recentCutoffDaysGlobal.value = Number.isFinite(globalDays) && globalDays > 0 ? String(globalDays) : "30";
-          recentCutoffToggleNable.checked = Boolean(data.enable_recent_device_cutoff_nable);
+          recentCutoffToggleNinja.checked = Boolean(data.enable_recent_device_cutoff_ninja);
           recentCutoffToggleSophos.checked = Boolean(data.enable_recent_device_cutoff_sophos);
-          const nableDays = Number(data.recent_device_cutoff_days_nable || 30);
+          const ninjaDays = Number(data.recent_device_cutoff_days_ninja || 30);
           const sophosDays = Number(data.recent_device_cutoff_days_sophos || 30);
-          recentCutoffDaysNable.value = Number.isFinite(nableDays) && nableDays > 0 ? String(nableDays) : "30";
+          recentCutoffDaysNinja.value = Number.isFinite(ninjaDays) && ninjaDays > 0 ? String(ninjaDays) : "30";
           recentCutoffDaysSophos.value = Number.isFinite(sophosDays) && sophosDays > 0 ? String(sophosDays) : "30";
           updateCutoffModeUi();
         } catch (err) {
@@ -357,14 +357,14 @@
         saveSettingsBtn.disabled = true;
         try {
           const globalDays = Number(recentCutoffDaysGlobal.value);
-          const nableDays = Number(recentCutoffDaysNable.value);
+          const ninjaDays = Number(recentCutoffDaysNinja.value);
           const sophosDays = Number(recentCutoffDaysSophos.value);
           if (!Number.isInteger(globalDays) || globalDays < 1 || globalDays > 3650) {
             cutoffMsg.textContent = "Global days must be a whole number between 1 and 3650.";
             return;
           }
-          if (!Number.isInteger(nableDays) || nableDays < 1 || nableDays > 3650) {
-            cutoffMsg.textContent = "N-able days must be a whole number between 1 and 3650.";
+          if (!Number.isInteger(ninjaDays) || ninjaDays < 1 || ninjaDays > 3650) {
+            cutoffMsg.textContent = "Ninja days must be a whole number between 1 and 3650.";
             return;
           }
           if (!Number.isInteger(sophosDays) || sophosDays < 1 || sophosDays > 3650) {
@@ -378,9 +378,9 @@
               use_global_device_cutoff: useGlobalCutoff.checked,
               enable_recent_device_cutoff: recentCutoffToggleGlobal.checked,
               recent_device_cutoff_days: globalDays,
-              enable_recent_device_cutoff_nable: recentCutoffToggleNable.checked,
+              enable_recent_device_cutoff_ninja: recentCutoffToggleNinja.checked,
               enable_recent_device_cutoff_sophos: recentCutoffToggleSophos.checked,
-              recent_device_cutoff_days_nable: nableDays,
+              recent_device_cutoff_days_ninja: ninjaDays,
               recent_device_cutoff_days_sophos: sophosDays,
             }),
           });
@@ -392,7 +392,7 @@
           if (useGlobalCutoff.checked) {
             cutoffMsg.textContent = `Global cutoff saved (${globalDays} days). Run a sync to apply to cached counts.`;
           } else {
-            cutoffMsg.textContent = `Provider cutoffs saved (N-able ${nableDays}d, Sophos ${sophosDays}d). Run a sync to apply to cached counts.`;
+            cutoffMsg.textContent = `Provider cutoffs saved (Ninja ${ninjaDays}d, Sophos ${sophosDays}d). Run a sync to apply to cached counts.`;
           }
         } catch (err) {
           cutoffMsg.textContent = `Save failed: ${err}`;
